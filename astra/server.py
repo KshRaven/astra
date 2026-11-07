@@ -446,7 +446,9 @@ def urls(host, port, tls=None):
         return [f"{scheme}://{host}:{port}"]
     ips = ["127.0.0.1"]
     try:
-        ips += [i[4][0] for i in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET) if i[4][0] not in ips]
+        for i in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            if i[4][0] not in ips:
+                ips.append(i[4][0])
     except OSError:
         pass
     return [f"{scheme}://{ip}:{port}" for ip in ips]

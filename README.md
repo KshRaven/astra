@@ -39,10 +39,15 @@ On Windows, run `.\scripts\dev.ps1`. If port 8800 is occupied, the script select
 This creates `.dev-home`, initializes an admin account, and starts the panel at port 8800. The generated password is printed once. To install from the project directory instead:
 
 ```bash
+python3 -m venv .venv && . .venv/bin/activate    # needed on Debian/Ubuntu 23.04+ (PEP 668: "externally-managed-environment")
 python -m pip install .
 astra init
 astra web
 ```
+
+`pipx install .` works too. For a server install use the installer below instead; its `astra` command re-runs itself through `sudo` when your user cannot read `/etc/astra`.
+
+If `./install.sh` says "Permission denied" (a zip or Windows checkout drops the executable bit), run `sudo bash install.sh`, or fix it once with `git update-index --chmod=+x install.sh uninstall.sh scripts/*.sh tests/*.sh`.
 
 On first start, Astra creates the `admin` account and prints a generated password if you have not run `astra init`. Use `astra passwd` to change it.
 

@@ -66,9 +66,13 @@ def show(res):
 
 
 def _prepare_home():
-    for d in (config.HOME, config.HOME / "extensions", config.LOGDIR):
-        d.mkdir(parents=True, exist_ok=True)
-        plat.secure(d)  # chmod 700 on Linux, restricted ACL on Windows
+    try:
+        for d in (config.HOME, config.HOME / "extensions", config.LOGDIR):
+            d.mkdir(parents=True, exist_ok=True)
+            plat.secure(d)  # chmod 700 on Linux, restricted ACL on Windows
+    except PermissionError:
+        sys.exit(f"Cannot write to {config.HOME} as this user. Run it with sudo (sudo astra ...), "
+                 "or use a private config instead:  ASTRA_HOME=~/.astra astra init")
 
 
 def _show_login(user, pw=None):

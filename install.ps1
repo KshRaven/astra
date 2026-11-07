@@ -87,7 +87,7 @@ set "ASTRA_HOME=$Conf"
 set "PYTHONPATH=$dest"
 set PYTHONUTF8=1
 set PYTHONUNBUFFERED=1
-"$py" -m astra %*
+"$py" -c "import sys; sys.argv[0]='astra'; sys.path[:]=[p for p in sys.path if p]; from astra.cli import main; main()" %*
 "@
 Set-Content -LiteralPath (Join-Path $Prefix 'astra.cmd') -Value $wrapper -Encoding ASCII
 $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')

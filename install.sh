@@ -32,9 +32,14 @@ rm -rf "$PREFIX/src/.git" "$PREFIX/src/.dev-home"
 echo "==> Creating the astra command"
 cat > /usr/local/bin/astra <<WRAP
 #!/bin/sh
+# Config lives in $CONF (root only): other users are re-run through sudo automatically.
+# The -c form (instead of -m) avoids importing an ./astra folder from the current directory.
 export ASTRA_HOME=$CONF
 export PYTHONPATH=$PREFIX/src
-exec /usr/bin/python3 -m astra "\$@"
+if [ "\$(id -u)" -ne 0 ] && [ ! -r "$CONF/config.json" ] && command -v sudo >/dev/null 2>&1; then
+  exec sudo env ASTRA_HOME="$CONF" PYTHONPATH="$PREFIX/src" /usr/bin/python3 -c 'import sys; sys.argv[0]="astra"; sys.path[:]=[p for p in sys.path if p]; from astra.cli import main; main()' "\$@"
+fi
+exec /usr/bin/python3 -c 'import sys; sys.argv[0]="astra"; sys.path[:]=[p for p in sys.path if p]; from astra.cli import main; main()' "\$@"
 WRAP
 chmod 755 /usr/local/bin/astra
 
