@@ -2,16 +2,18 @@
 import gzip, hashlib, http.cookies, ipaddress, json, os, re, signal, socket, ssl, sys, threading, traceback, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from . import __version__, audit, config, core, daemon, jobs, legal, mfa, notify, plat
+from . import __version__, audit, config, core, daemon, deploy, jobs, mfa, notify, plat, sitehost
 from .auth import Limiter
 from .errors import PanelError
 from .extensions import Raw, load_extensions, registry
+from .shell import EMAIL
 
 WEB = Path(__file__).parent / "web"
 MAX_BODY = 12 * 1024 * 1024
 JS, CSS = "text/javascript; charset=utf-8", "text/css; charset=utf-8"
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", JS),
-          "/theme.js": ("theme.js", JS), "/style.css": ("style.css", CSS)}
+          "/theme.js": ("theme.js", JS), "/style.css": ("style.css", CSS),
+          "/favicon.svg": ("favicon.svg", "image/svg+xml"), "/favicon.ico": ("favicon.svg", "image/svg+xml")}
 UI_FILE = re.compile(r"/ui/([a-z0-9_-]+\.(js|css))")  # lazily loaded UI modules (e.g. the desktop)
 AUTH_BODY_MAX = 4096
 _cache = {}  # path -> (mtime, raw, gzipped, etag)
@@ -76,12 +78,6 @@ class Handler(BaseHTTPRequestHandler):
             pass
         self._send(code, {"error": msg}, extra={"Connection": "close"})
 
-    def _legal(self, name):
-        page = legal.render(name)
-        if page is None:
-            return self._send(404, {"error": "not found"})
-        self._send(200, page, "text/html; charset=utf-8", {"Cache-Control": "no-cache"})
-
     def do_GET(self):
         self._dispatch("GET")
 
@@ -91,10 +87,17 @@ class Handler(BaseHTTPRequestHandler):
     def _dispatch(self, method):
         u = urllib.parse.urlsplit(self.path)
         path = u.path
+        base = (config.cfg.get("base_path") or "").rstrip("/")   # the panel also answers under /astra/ (behind a proxy or directly)
+        if base and (path == base or path.startswith(base + "/")):
+            if path == base:
+                self.send_response(301)
+                self.send_header("Location", base + "/" + ("?" + u.query if u.query else ""))
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            path = path[len(base):]
         if method == "GET" and (path in STATIC or path == "/custom.css" or UI_FILE.fullmatch(path)):
             return self._static(path)
-        if method == "GET" and path.startswith("/legal/"):
-            return self._legal(path[7:])
         if not path.startswith("/api/"):
             return self._send(404, {"error": "not found"})
         ip = self.client_address[0]
@@ -216,6 +219,10 @@ class Handler(BaseHTTPRequestHandler):
             return jobs.route(parts, method, params, ip)
         if head == "settings":
             return self._settings(method, params, ip)
+        if head == "panel" and parts[1:2] in (["service"], ["domain"]):
+            if method == "POST":
+                audit.log("action", ip=ip, ext="panel", route="/".join(parts[1:]), params=audit.redact(params))
+            return deploy.route(parts[1:], method, params)
         if head == "panel" and parts[1:] == ["restart"] and method == "POST":
             audit.log("action", ip=ip, ext="panel", route="restart", params={})
             threading.Timer(0.8, restart_process).start()
@@ -291,9 +298,10 @@ def _settings_route(self, method, params, ip):
         return {"host": c["host"], "port": c["port"], "tls": bool(c["tls_cert"] and c["tls_key"]),
                 "tls_cert": c["tls_cert"], "tls_key": c["tls_key"], "allowed_ips": c["allowed_ips"],
                 "session_ttl_hours": c["session_ttl_hours"], "audit_retention_days": c["audit_retention_days"],
-                "console_enabled": c.get("console_enabled", True), "alerts": c["alerts"], "operator": c["operator"],
-                "urls": urls(c["host"], int(c["port"])), "home": str(config.HOME), "your_ip": ip,
-                "version": __version__, "os": plat.OS_NAME}
+                "console_enabled": c.get("console_enabled", True), "alerts": c["alerts"],
+                "urls": urls(c["host"], int(c["port"])), "base_path": c.get("base_path", "/astra"), "domain": c.get("domain", ""), "home": str(config.HOME), "your_ip": ip,
+                "version": __version__, "os": plat.OS_NAME,
+                "smtp": {**{k: c["smtp"].get(k, "") for k in ("host", "port", "security", "user", "from")}, "password_set": bool(c["smtp"].get("password"))}}
     if method != "POST":
         raise PanelError("POST required", 405)
     restart = False
@@ -325,10 +333,38 @@ def _settings_route(self, method, params, ip):
                     if not 0 <= v <= 100:
                         raise PanelError("alert limits are percentages (0 turns one off)")
                     c["alerts"][k] = v
-        if isinstance(params.get("operator"), dict):
-            for k in ("name", "email", "address"):
-                if k in params["operator"]:
-                    c["operator"][k] = str(params["operator"][k])[:200]
+        if isinstance(params.get("smtp"), dict):   # outgoing mail (sign-in codes, alerts); empty host turns it off
+            sm, new = c["smtp"], params["smtp"]
+            if "host" in new:
+                hv = str(new["host"]).strip()
+                if hv and not re.fullmatch(r"[A-Za-z0-9.:-]{1,253}", hv):
+                    raise PanelError("mail server: a host name or address such as smtp.example.com or 127.0.0.1")
+                sm["host"] = hv
+            if "port" in new and str(new["port"]).strip():
+                pv = int(new["port"])
+                if not 1 <= pv <= 65535:
+                    raise PanelError("mail port must be 1-65535 (587 is usual)")
+                sm["port"] = pv
+            if new.get("security") in ("starttls", "ssl", "none"):
+                sm["security"] = new["security"]
+            if "user" in new:
+                sm["user"] = str(new["user"]).strip()[:200]
+            if new.get("password") and new["password"] != "<set>":
+                sm["password"] = str(new["password"])[:200]
+            if new.get("clear_password"):
+                sm["password"] = ""
+            if "from" in new:
+                fv = str(new["from"]).strip()
+                if fv and not EMAIL.match(fv):
+                    raise PanelError("sender address must look like astra@example.com")
+                sm["from"] = fv
+            if any("\n" in str(sm.get(k, "")) or "\r" in str(sm.get(k, "")) for k in sm):
+                raise PanelError("mail settings cannot contain line breaks")
+        if "base_path" in params:
+            bp = str(params["base_path"]).strip().rstrip("/")
+            if bp and not re.fullmatch(r"/[A-Za-z0-9._-]{1,40}", bp):
+                raise PanelError("path prefix looks like /astra (letters, digits . _ -), or empty to turn it off")
+            c["base_path"] = bp
         if "host" in params:
             h = str(params["host"]).strip()
             if h != "localhost":
@@ -351,6 +387,11 @@ def _settings_route(self, method, params, ip):
     except ValueError:
         raise PanelError("invalid value")
     config.save()
+    if params.get("mail_test"):   # after saving, so the test uses what was just entered
+        to = str(params["mail_test"]).strip()
+        if not EMAIL.match(to):
+            raise PanelError("enter a valid address to send the test to")
+        mfa.send_mail(to, "astra test message", "If you can read this, the panel can send e-mail.\nSign-in codes and alerts will use the same settings.\n")
     audit.log("action", ip=ip, ext="panel", route="settings", params=audit.redact({k: v for k, v in params.items()}))
     return {"ok": True, "restart_needed": restart}
 
@@ -422,6 +463,10 @@ def serve():
     load_extensions()
     audit.prune()
     core.start_monitor()
+    try:
+        sitehost.start()   # built-in website engine (idle unless a site is enabled)
+    except Exception as e:
+        print(f"site engine not started: {e}", file=sys.stderr)
     host, port = config.cfg["host"], int(config.cfg["port"])
     srv = make_server(host, port)
     tls = bool(config.cfg["tls_cert"] and config.cfg["tls_key"])

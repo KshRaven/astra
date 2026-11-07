@@ -4,7 +4,8 @@ from ..errors import PanelError
 from ..shell import safe_path
 from . import Extension, Raw
 
-EXT = Extension("files", "Files", "📁", order=30, description="Sandboxed file manager (limited to file_roots)")
+EXT = Extension("files", "Files", "folder", order=30, ui="files",
+                description="Browse, edit, upload, move and copy files. Limited to the folders in file_roots (Settings > Panel).")
 BAD_WIN_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 MAX_EDIT, MAX_UPLOAD, MAX_DOWNLOAD = 2 << 20, 8 << 20, 100 << 20
 
@@ -75,7 +76,7 @@ def _is_root(p):
 def list_(p):
     path = _dir(p.get("path"))
     if not os.path.isdir(path):
-        raise PanelError("not a directory")
+        raise PanelError("this is a file, not a folder" if os.path.isfile(path) else "this folder does not exist (it may have been moved or deleted)", 404)
     rows = []
     with os.scandir(path) as it:
         for e in it:
@@ -86,7 +87,16 @@ def list_(p):
             kind = "link" if _is_link(e.path) else "dir" if e.is_dir() else "file"
             rows.append({"name": e.name, "type": kind, "size": st.st_size, "mtime": int(st.st_mtime)})
     rows.sort(key=lambda r: (r["type"] != "dir", r["name"].lower()))
-    return {"path": path, "parent": None if _is_root(path) else os.path.dirname(path), "entries": rows}
+    return {"path": path, "parent": None if _is_root(path) else os.path.dirname(path), "entries": rows, "sep": os.sep, "win": plat.IS_WIN}
+
+
+@EXT.route("roots")
+def roots(p):
+    out = []
+    for r in _roots():
+        if os.path.isdir(r):
+            out.append({"path": os.path.realpath(r), "name": os.path.basename(os.path.realpath(r).rstrip("/\\")) or os.path.realpath(r)})
+    return out
 
 
 @EXT.route("read")
@@ -181,4 +191,69 @@ def download(p):
         return Raw(f.read(), filename=os.path.basename(path))
 
 
-EXT.sections = [{"type": "files"}]
+def _paths(p):
+    v = p.get("paths")
+    if not isinstance(v, list) or not v or len(v) > 500:
+        raise PanelError("nothing selected")
+    return [_entry(x) for x in v]
+
+
+def _unique(dest, name):
+    stem, ext = os.path.splitext(name)
+    cand, n = name, 1
+    while os.path.lexists(os.path.join(dest, cand)):
+        cand = f"{stem} copy{'' if n == 1 else ' ' + str(n)}{ext}"
+        n += 1
+    return cand
+
+
+def _into_self(src, dest):
+    a, b = os.path.normcase(os.path.realpath(src)), os.path.normcase(os.path.realpath(dest))
+    return b == a or b.startswith(a.rstrip("/\\") + os.sep)
+
+
+@EXT.route("move", write=True)
+@_oserr
+def move(p):
+    dest = _dir(p.get("dest"))
+    if not os.path.isdir(dest):
+        raise PanelError("destination is not a folder")
+    for src in _paths(p):
+        if _is_root(src):
+            raise PanelError("cannot move a root folder", 403)
+        name = os.path.basename(src)
+        if os.path.isdir(src) and _into_self(src, dest):
+            raise PanelError(f"cannot move {name} into itself")
+        if os.path.dirname(src) == dest:
+            continue
+        target = os.path.join(dest, name)
+        if os.path.lexists(target):
+            raise PanelError(f"{name} already exists in the destination")
+        shutil.move(src, target)
+    return {"ok": True}
+
+
+@EXT.route("copy", write=True)
+@_oserr
+def copy(p):
+    dest = _dir(p.get("dest"))
+    if not os.path.isdir(dest):
+        raise PanelError("destination is not a folder")
+    for src in _paths(p):
+        name = _unique(dest, os.path.basename(src))
+        target = os.path.join(dest, name)
+        if os.path.isdir(src) and not _is_link(src):
+            if _into_self(src, dest):
+                raise PanelError(f"cannot copy {os.path.basename(src)} into itself")
+            shutil.copytree(src, target, symlinks=True)
+        else:
+            shutil.copy2(src, target, follow_symlinks=False)
+    return {"ok": True}
+
+
+@EXT.route("delete_many", write=True)
+@_oserr
+def delete_many(p):
+    for t in _paths(p):
+        delete({"path": t})
+    return {"ok": True}

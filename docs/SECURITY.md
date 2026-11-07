@@ -1,31 +1,41 @@
-# Security model
+# Security Model
 
-astra can restart services, edit files and manage firewalls, so treat access to it as root access.
+Astra can run commands, install software, manage services, edit files, and change firewall rules. Treat a panel account as having the privileges of the Astra process. The Linux system installer runs Astra as root; the Windows installer runs it as SYSTEM. The web command console is enabled by default and executes shell commands with those same privileges.
 
-## Built in
-- Listens on `127.0.0.1` by default; warns loudly if bound elsewhere without TLS.
-- One 256-bit access token, stored only as a SHA-256 hash, compared in constant time. The browser exchanges it for a random session id (Bearer header, no cookies so no CSRF, kept in `sessionStorage` for the tab only, expires after `session_ttl_hours`).
-- Optional second factor (authenticator app, e-mail code). With a factor on, the raw token is rejected by every API route except login; wrong codes count toward the IP lockout; codes are single-use with 5 tries; challenges expire in 5 minutes.
-- Request bodies are read only after authentication (login bodies capped at 4 KB).
-- Optional Linux desktop runs as an unprivileged user, memory-capped, on 127.0.0.1 only, with a random VNC password, and installs nothing without confirmation and a resource check.
-- Brute-force protection: 5 bad tokens block that IP for 5 minutes. Optional `allowed_ips`.
-- Every write action and failed login goes to `/etc/astra/logs/audit.log` (secrets redacted, rotated at 5 MB).
-- No `shell=True` anywhere; all inputs validated by strict patterns; commands use argument lists.
-- File access is limited to `file_roots` after resolving symlinks; deleting/renaming acts on the link, not its target.
-- Services, log files and kill targets are allowlisted or protected; archives extract with Python's safe `data` filter.
-- Strict Content-Security-Policy (`default-src 'self'`), `X-Frame-Options: DENY`, `no-store`, no inline scripts.
-- Systemd unit with `NoNewPrivileges`, `PrivateTmp` and kernel protections.
+## Defaults and Protections
 
-## You should
-1. Keep the default loopback bind and use an SSH tunnel, **or** put it behind HTTPS with an IP allowlist (`nginx/astra.conf.example`).
-2. Behind a proxy the panel sees only the proxy's IP, so do the IP allowlisting and rate limiting in the proxy.
-3. Run `astra doctor` and open the Security tab after changes.
-4. Rotate the token (Settings) if it may have leaked; `config.json` must stay mode 600.
-5. Only install extensions you have read: they run as root with full access.
-6. Back up `/etc/astra` with `scripts/backup-config.sh`.
+- The default listener is `0.0.0.0:8800` using plain HTTP. It is reachable on the machine's network unless a firewall blocks it. Configure TLS or bind to loopback before use on an untrusted network.
+- Sign-in uses one administrator username and password. Passwords are stored as salted PBKDF2-SHA256 hashes, not plaintext. There are no separate user accounts or roles.
+- Sessions are random, held server-side in memory, and expire after `session_ttl_hours` (default 8 hours). The browser receives an `HttpOnly`, `SameSite=Strict` session cookie. Astra adds the `Secure` cookie flag when its own TLS certificate and key are configured. Sessions end when the server restarts or the user signs out.
+- Optional TOTP and e-mail factors can be enabled in Settings. Login challenges expire after 5 minutes; e-mail codes expire after 10 minutes and allow five attempts; TOTP codes cannot be reused.
+- Failed logins are limited per client IP: five failures within five minutes cause further API requests from that IP to be blocked until the window passes. `allowed_ips` can further restrict API access.
+- API requests require a valid session before the request body is read. Authentication request bodies are limited to 4 KB; other API bodies are limited to 12 MB. POST requests with a mismatched `Origin` are rejected.
+- The console can be disabled with `astra config set console_enabled false`. Console commands are run by a shell, and the command text (up to 300 characters) and working directory are written to the audit log. Avoid putting secrets in commands.
+- Extension routes marked `write=True` require POST and are audited. Extension Python runs in-process with the panel's full OS privileges. Install only code you have reviewed.
+- The extension subprocess helper uses argument lists and avoids `shell=True`; this does not apply to the explicitly shell-based command console.
+- File operations are constrained by `file_roots` after resolving symlinks. Services, logs, and process targets have allowlists or guards. A local attacker able to race filesystem changes may still exploit the gap between path validation and use; keep roots writable only by trusted users.
+- The web server sends a restrictive Content Security Policy, frame protections, MIME protections, and cache controls. Systemd adds `NoNewPrivileges`, `PrivateTmp`, and kernel protections.
+- The optional Linux desktop session is separate from the web desktop. Its VNC server is bound to loopback, runs as configured unprivileged `desktop.user`, is memory-capped, and uses a generated password. Installation requires confirmation and resource checks.
 
-## Known limits
-- Single operator, no per-user accounts. Sessions are lost on restart. TOTP secret and SMTP password sit in `config.json` (mode 600), so anyone who can read it is root already. E-mail codes are only as safe as the mailbox. The Linux desktop includes a terminal for `desktop.user`: treat it as shell access for that user.
-- A path check followed by file use is not atomic (a local attacker who can swap symlinks inside a file root could race it). Keep `file_roots` to folders only you control.
-- Cron commands and extension code run as the configured user by design.
-- Report-only checks (Security tab) are heuristics, not an audit.
+## Recommended Deployment
+
+1. For local-only access, set `host` to `127.0.0.1` and connect through an SSH tunnel.
+2. For remote access, use HTTPS and a firewall or `allowed_ips` allowlist. See [nginx/astra.conf.example](../nginx/astra.conf.example) for a reverse-proxy example. When TLS terminates at a proxy, configure that proxy to accept only HTTPS and restrict access; Astra cannot infer the original scheme from the proxy.
+3. Disable the command console if it is not required: `astra config set console_enabled false`.
+4. Run `astra doctor` after deployment and review the Security tab.
+5. Change the generated password with `astra passwd` if it may have been exposed. Keep the config directory private; it contains the password hash, MFA secret, SMTP credentials, and other settings.
+6. Review and back up the config directory using `scripts/backup-config.sh` or `scripts/backup-config.ps1`.
+
+## Audit and Data
+
+Audit events are stored in `<config directory>/logs/audit.log`, rotated at about 5 MB, and pruned according to `audit_retention_days` (default 90 days). Events can include client IPs, account names, action parameters, and console command text. Passwords and fields named `password`, `token`, `content`, or `data` are redacted from extension/action parameters; console command text is not redacted. Panel diagnostics are stored in `<config directory>/logs/panel.log`. Notifications are stored separately in `<config directory>/notifications.json`.
+
+The config directory is `/etc/astra` for root on Linux, `%ProgramData%\astra` for an elevated Windows install, or `~/.astra` for an unprivileged user unless `ASTRA_HOME` overrides it. On Linux, Astra sets private directory/file modes when it creates them. On Windows, it applies an ACL to the config directory.
+
+## Known Limits
+
+- This is a single-operator panel. It has no role separation or independent identities for audit attribution; actions should not be treated as non-repudiable records.
+- TOTP secrets and SMTP credentials are stored in the protected config file. Anyone who can read that file can access those secrets.
+- E-mail MFA is only as secure as the mailbox and SMTP account. The Linux desktop contains a terminal and should be treated as shell access for `desktop.user`.
+- Security-tab checks are informational heuristics, not a formal security audit. Software installation and management commands invoke real tools on the host.
+- Windows and some optional package-install paths require additional real-system validation; see [TODO.md](../TODO.md).

@@ -38,25 +38,6 @@ exec /usr/bin/python3 -m astra "\$@"
 WRAP
 chmod 755 /usr/local/bin/astra
 
-# Upgrading from the project's old name (mypanel): move config, service, cron file and nginx sites over
-if [ -d /etc/mypanel ] && [ ! -d "$CONF" ]; then
-  echo "==> Migrating mypanel -> astra"
-  systemctl disable --now mypanel 2>/dev/null || true
-  mv /etc/mypanel "$CONF"
-  rm -f /etc/systemd/system/mypanel.service /usr/local/bin/mypanel
-  rm -rf /opt/mypanel
-  [ -f /etc/cron.d/mypanel ] && mv /etc/cron.d/mypanel /etc/cron.d/astra
-  for f in /etc/nginx/sites-available/mypanel-*; do
-    [ -e "$f" ] || continue
-    old="${f##*/}"; new="astra-${old#mypanel-}"
-    sed '1s/# mypanel:/# astra:/' "$f" > "/etc/nginx/sites-available/$new" && rm -f "$f"
-    if [ -L "/etc/nginx/sites-enabled/$old" ]; then
-      rm -f "/etc/nginx/sites-enabled/$old"; ln -s "/etc/nginx/sites-available/$new" "/etc/nginx/sites-enabled/$new"
-    fi
-  done
-  if command -v nginx >/dev/null && nginx -t >/dev/null 2>&1; then nginx -s reload 2>/dev/null || true; fi
-fi
-
 echo "==> Initialising config in $CONF (the admin password is shown once)"
 astra init
 astra config set port "$PORT" >/dev/null

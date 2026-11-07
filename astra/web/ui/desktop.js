@@ -6,7 +6,7 @@
   const KEY = 'mp_desktop', STEP = 24;
   window.ASTRA_UI.desktop = (view, ext, ASTRA) => {
     const { h, $, call, card, toast, showText, extView, dashboard, EXT } = ASTRA;
-    if (!$('link[href="/ui/desktop.css"]')) document.head.append(h('link', { rel: 'stylesheet', href: '/ui/desktop.css' }));
+    if (!$('link[href="ui/desktop.css"]')) document.head.append(h('link', { rel: 'stylesheet', href: 'ui/desktop.css' }));
     const layout = (() => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; } })();
     const save = () => { try { localStorage.setItem(KEY, JSON.stringify(layout)); } catch { /* storage unavailable: layout just isn't remembered */ } };
     const wins = new Map();

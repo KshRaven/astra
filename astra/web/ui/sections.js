@@ -238,6 +238,18 @@
     return h('section', {}, s.title ? h('div', { class: 'card-h' }, h('h2', {}, s.title)) : null, s.desc ? h('p', { class: 'card-d' }, s.desc) : null, box);
   };
 
+  /* ---------- gate: show different sections depending on a status route ({ok:true} shows s.sections, else d.sections) ---------- */
+  secs.gate = (ext, s, ctx) => {
+    const box = h('div', { class: 'col' }); let cur = null, sub = null;
+    const paint = d => {
+      const list = d.ok ? s.sections : (d.sections || []), key = d.ok ? 'ok' : JSON.stringify(list);
+      if (key === cur) return; cur = key; sub && sub.dispose(); sub = ctx.scope.child();
+      box.replaceChildren(...list.map(x => A.renderSection(ext, x, { ...ctx, scope: sub })));
+    };
+    loader(box, () => call(ext, s.source, s.params), paint, ctx.scope, s.refresh);
+    return box;
+  };
+
   /* ---------- tabs inside a page ---------- */
   secs.tabs = (ext, s, ctx) => {
     const tabs = s.tabs || [], wrap = h('div', { class: 'col' });

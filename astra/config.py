@@ -10,6 +10,10 @@ _OS = plat.defaults(HOME)
 
 DEFAULTS = {
     "host": "0.0.0.0", "port": 8800,          # reachable from the network like aaPanel; set host to 127.0.0.1 to keep it local
+    "base_path": "/astra",                    # the panel also answers at http://host:port/astra/ (and behind a reverse proxy at /astra/)
+    "domain": "",                             # set by `astra domain set` / Settings > Domain and launch
+    "site_engine": "auto",                    # auto = nginx when installed, else the built-in engine; "builtin" forces the built-in one
+    "site_port": 8080,                        # built-in website server (used when nginx is not installed)
     "admin": {"username": "", "password_hash": ""},   # the one operator account (set by `astra init`)
     "tls_cert": "", "tls_key": "",            # set both to serve HTTPS directly
     "allowed_ips": [],                        # empty = any signed-in client
@@ -25,11 +29,11 @@ DEFAULTS = {
     "alerts": {"cpu": 90, "mem": 90, "disk": 90},   # percent; 0/absent disables
     "sample_interval": 5, "history_len": 360,        # 360 x 5s = 30 min
     "session_ttl_hours": 8,
+    "job_concurrency": 1,                              # installs/updates that may run at once (1 = one after another)
     "console_enabled": True,                          # the Console drawer in the web panel (runs commands as the panel user)
     "audit_retention_days": 90,                       # older audit lines are deleted at start-up
     "mfa": {"totp_secret": "", "totp_enabled": False, "totp_last": 0, "email": "", "email_enabled": False},
     "smtp": {"host": "", "port": 587, "security": "starttls", "user": "", "password": "", "from": ""},
-    "operator": {"name": "", "email": "", "address": ""},   # shown on /legal pages
     "desktop": {"user": "", "geometry": "1280x720", "mem_max_mb": 600},  # optional Linux-only GUI session
 }
 SECRET_PATHS = (("admin", "password_hash"), ("mfa", "totp_secret"), ("smtp", "password"))

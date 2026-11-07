@@ -22,3 +22,9 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
     }
 }
+
+# Same host, panel under a path (works because the panel also answers under /astra/):
+#   location /astra/ {
+#       proxy_pass http://127.0.0.1:8800;      # no trailing slash: the prefix is kept, the panel handles it
+#       proxy_set_header Host $host;
+#   }

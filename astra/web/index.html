@@ -1,14 +1,14 @@
 <!doctype html>
-<html lang="en" data-theme="graphite" data-accent="indigo" data-size="m" data-density="cozy" data-sidebar="full">
+<html lang="en" data-theme="graphite" data-accent="indigo" data-size="m" data-density="cozy" data-sidebar="rail">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>astra</title>
-<link rel="icon" href="data:,">
-<link rel="stylesheet" href="/style.css">
-<link rel="stylesheet" href="/custom.css">
-<script src="/theme.js"></script>
+<link rel="icon" type="image/svg+xml" href="favicon.svg"><link rel="alternate icon" href="favicon.ico">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="custom.css">
+<script src="theme.js"></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -30,7 +30,7 @@
           <button type="button" id="pw-eye" class="icon-btn sm ghost" aria-label="Show password"></button></div></div>
       <button class="primary lg" id="login-go">Sign in</button>
       <p id="login-err" class="bad" role="alert"></p>
-      <p class="muted small">Sessions stay in a secure browser cookie. Nothing is loaded from other sites. <a href="/legal/privacy">Privacy</a> · <a href="/legal/terms">Terms</a></p>
+      <p class="muted small">Sessions stay in a secure browser cookie. Nothing is loaded from other sites.</p>
     </form>
     <form id="mfa-form" class="login-card" hidden>
       <span id="mfa-logo" class="logo sm"></span>
@@ -50,8 +50,7 @@
   <aside id="side" aria-label="Main navigation">
     <div class="side-brand"><span id="side-logo" class="logo sm"></span><span class="wordmark">astra</span><span id="ver" class="ver"></span></div>
     <nav id="nav"></nav>
-    <div class="side-foot"><button type="button" id="rail" class="icon-btn ghost"></button>
-      <span class="legal"><a href="/legal/privacy">Privacy</a> · <a href="/legal/terms">Terms</a></span></div>
+    <div class="side-foot"><button type="button" id="rail" class="icon-btn ghost"></button></div>
   </aside>
   <div id="scrim"></div>
   <div id="shell">
@@ -68,9 +67,9 @@
   </div>
 </div>
 <div id="toasts" role="status" aria-live="polite"></div>
-<script src="/ui/icons.js"></script>
-<script src="/app.js"></script>
-<script src="/ui/sections.js"></script>
-<script src="/ui/boot.js"></script>
+<script src="ui/icons.js"></script>
+<script src="app.js"></script>
+<script src="ui/sections.js"></script>
+<script src="ui/boot.js"></script>
 </body>
 </html>

@@ -1,7 +1,7 @@
-# Third-party material
+# Third-Party Material and Dependencies
 
-astra itself bundles **no** third-party code, fonts, icons or images. The web GUI uses the visitor's system fonts and Unicode symbols. Python standard library only.
+The web interface has no external script, font, or image downloads. It uses system fonts and icons rendered by the application. Astra's core uses the Python standard library. On Windows, the package declares `windows-curses` for the terminal UI; development extras include pytest and Ruff. See `pyproject.toml` for the current package declarations and their licenses.
 
-Tools the panel calls if you install them (each under its own license, installed from your OS repositories, not shipped here): nginx, certbot, ufw, fail2ban, Docker, MySQL/MariaDB, PostgreSQL, and for the optional Linux desktop TigerVNC, noVNC, websockify, Openbox and xterm.
+The panel can install or call server software that is not bundled with Astra. The OS package manager installs those tools from its configured repositories under their respective licenses. Examples include nginx, certbot, ufw, fail2ban, Docker, database servers and clients, and (for the optional Linux desktop session) TigerVNC, noVNC, websockify, Openbox, and xterm. Review each package and repository before installing it.
 
-astra is MIT licensed (see `LICENSE`).
+Astra is licensed under the MIT license; see `LICENSE`.

@@ -86,7 +86,7 @@ function ansi(text) {
 const bus = new EventTarget();
 class Scope {
   constructor() { this.t = []; this.c = []; this.r = []; }
-  interval(fn, ms) { const id = setInterval(() => { if (!document.hidden) fn(); }, ms); this.t.push(id); return id; }
+  interval(fn, ms) { const id = setInterval(() => { if (!document.hidden) fn(); }, ms * (window.ASTRA_THEME ? window.ASTRA_THEME.pace() : 1)); this.t.push(id); return id; }
   onLeave(f) { this.c.push(f); }
   reload(f) { this.r.push(f); }
   on(name, fn) { const l = e => fn(e.detail); bus.addEventListener(name, l); this.c.push(() => bus.removeEventListener(name, l)); }
@@ -210,23 +210,26 @@ async function req(url, method = 'GET', params = {}) {
   } else { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(params); }
   let r;
   try { r = await fetch(url, opt); } catch { throw new Error('Cannot reach the panel. Is it still running?'); }
-  if (r.status === 401 && !url.startsWith('/api/auth/')) { signedOut('Your session ended. Sign in again.'); throw new Error('Session ended: sign in again'); }
+  if (r.status === 401 && !url.startsWith('api/auth/')) { signedOut('Your session ended. Sign in again.'); throw new Error('Session ended: sign in again'); }
   if (!r.ok) { let m = r.statusText; try { m = (await r.json()).error || m; } catch { /* not json */ } throw new Error(m); }
   return (r.headers.get('Content-Type') || '').includes('json') ? r.json() : r.blob();
 }
-const call = (ext, route, params, method) => req(`/api/ext/${ext}/${route}`, method || 'GET', params);
-const post = (ext, route, params) => req(`/api/ext/${ext}/${route}`, 'POST', params);
+const call = (ext, route, params, method) => req(`api/ext/${ext}/${route}`, method || 'GET', params);
+const post = (ext, route, params) => req(`api/ext/${ext}/${route}`, 'POST', params);
 
 const scripts = {};
 const loadScript = src => scripts[src] || (scripts[src] = new Promise((ok, no) => document.head.append(h('script', { src, onload: ok, onerror: () => { delete scripts[src]; no(new Error('Could not load ' + src)); } }))));
 const loadCss = href => { if (!$(`link[href="${href}"]`)) document.head.append(h('link', { rel: 'stylesheet', href })); };
-async function loadModule(name) { if (!(window.ASTRA_UI && window.ASTRA_UI[name])) await loadScript(`/ui/${name}.js`); return window.ASTRA_UI[name]; }
+async function loadModule(name) { if (!(window.ASTRA_UI && window.ASTRA_UI[name])) await loadScript(`ui/${name}.js`); return window.ASTRA_UI[name]; }
 
 /* ---------- jobs, console ---------- */
 const doneSeen = new Set();
 function jobFinished(j) { if (doneSeen.has(j.id)) return; doneSeen.add(j.id); emit('job:done', j); pollFeed(); }
 async function openConsole(opts = {}) {
   try { const m = await loadModule('console'); m.open(opts); } catch (e) { toast(e.message, true); }
+}
+async function openTasks() {
+  try { const m = await loadModule('tasks'); m.open(); } catch (e) { toast(e.message, true); }
 }
 /** Show a background job (install, update, backup...) in the console drawer. */
 const watchJob = (id, title) => openConsole({ job: id, title });
@@ -235,11 +238,16 @@ function setRunning(n) {
   const b = $('#tb-console .badge-dot');
   if (b) { b.textContent = n; b.hidden = !n; }
 }
+function setPending(n) {
+  S.pending = n;
+  const b = $('#tb-tasks .badge-dot');
+  if (b) { b.textContent = n; b.hidden = !n; }
+}
 async function pollJobs() {
   if (document.hidden || !S.started) return;
   try {
-    const r = await req('/api/jobs');
-    setRunning(r.running);
+    const r = await req('api/jobs');
+    setRunning(r.running); setPending(r.pending || 0);
     S.jobs = r.jobs;
     const live = new Set(r.jobs.filter(j => j.state === 'running').map(j => j.id));
     for (const id of [...(S.liveJobs || [])]) if (!live.has(id)) { const j = r.jobs.find(x => x.id === id); if (j && j.kind !== 'console') jobFinished(j); }
@@ -268,7 +276,7 @@ function paintBell() {
 async function pollFeed() {
   if (document.hidden || !S.started) return;
   try {
-    const f = await req('/api/notifications', 'GET', { limit: 200 });
+    const f = await req('api/notifications', 'GET', { limit: 200 });
     const fresh = S.feed ? f.items.filter(i => i.id > (S.maxSeen || 0) && !i.read && (i.sev === 'critical' || i.sev === 'warning')) : [];
     S.maxSeen = Math.max(S.maxSeen || 0, ...f.items.map(i => i.id), 0);
     S.feed = f; paintBell();
@@ -283,11 +291,11 @@ async function openNotifications() {
   Object.assign(m.body.style, { padding: '0', gap: '0', display: 'flex', flexDirection: 'column' });
   m.body.append(chips, list);
   m.el.append(h('div', { class: 'dlg-f' },
-    h('button', { type: 'button', onclick: async () => { await req('/api/notifications/read', 'POST', {}); await pollFeed(); paint(); } }, I('check'), 'Mark all read'),
-    h('button', { type: 'button', onclick: async () => { await req('/api/notifications/clear', 'POST', {}); await pollFeed(); paint(); } }, I('trash'), 'Clear read'),
+    h('button', { type: 'button', onclick: async () => { await req('api/notifications/read', 'POST', {}); await pollFeed(); paint(); } }, I('check'), 'Mark all read'),
+    h('button', { type: 'button', onclick: async () => { await req('api/notifications/clear', 'POST', {}); await pollFeed(); paint(); } }, I('trash'), 'Clear read'),
     h('button', { type: 'button', class: 'primary', onclick: () => m.close() }, 'Close')));
   const item = i => h('div', { class: `nf ${i.sev}${i.read ? '' : ' unread'}`, tabindex: 0, role: 'button', 'aria-label': `${i.title}. ${i.read ? 'Read' : 'Unread, press to mark as read'}`,
-    onclick: async () => { if (!i.read) { await req('/api/notifications/read', 'POST', { ids: [i.id] }); await pollFeed(); paint(); } },
+    onclick: async () => { if (!i.read) { await req('api/notifications/read', 'POST', { ids: [i.id] }); await pollFeed(); paint(); } },
     onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.currentTarget.click(); } } },
     I(SEV_ICON[i.sev] || 'info'), h('div', { class: 'b' }, h('div', { class: 'ti' }, i.title), i.detail ? h('div', { class: 'de' }, i.detail) : null,
       h('div', { class: 'tm' }, `${S.feed.cats[i.cat] || i.cat} · ${ago(i.ts)}${i.n > 1 ? ' · happened ' + i.n + ' times' : ''}`)));
@@ -314,6 +322,7 @@ function palette() {
   const cmds = [
     ...navItems().map(n => ({ label: n.title, icon: n.icon, hint: 'Go to', run: () => go(n.id) })),
     { label: 'Open console', icon: 'terminal', hint: 'Ctrl+`', run: () => openConsole() },
+    { label: 'Pending tasks', icon: 'tasks', run: openTasks },
     { label: 'Notifications', icon: 'bell', run: openNotifications },
     { label: 'Settings', icon: 'settings', hint: 'Go to', run: () => go('settings') },
     { label: 'Settings: account and password', icon: 'user', run: () => go('settings', 'account') },
@@ -419,7 +428,7 @@ function dashboard(view, scope = page) {
   const lv = p => p >= 90 ? 'bad' : p >= 75 ? 'warn' : '';
   const load = async () => {
     try {
-      const [d, hist, al] = await Promise.all([req('/api/dashboard'), req('/api/history'), req('/api/alerts')]);
+      const [d, hist, al] = await Promise.all([req('api/dashboard'), req('api/history'), req('api/alerts')]);
       const now = d.now || { cpu: 0, mem: 0, rx: 0, tx: 0 }, Sm = hist.samples, disk = d.disks[0], dp = disk ? disk.used / disk.total * 100 : 0;
       stats.replaceChildren(stat('CPU', now.cpu.toFixed(0) + '%', d.cpus + ' cores', lv(now.cpu), 'cpu'),
         stat('Memory', now.mem.toFixed(0) + '%', bytes(d.mem.used) + ' of ' + bytes(d.mem.total), lv(now.mem), 'layers'),
@@ -458,6 +467,7 @@ function buildTopbar() {
   const mk = (id, icon, label, fn, badgeCls) => h('button', { type: 'button', id, class: 'icon-btn', title: label, 'aria-label': label, onclick: fn }, I(icon), badgeCls !== undefined ? h('span', { class: 'badge-dot ' + badgeCls, hidden: true }, '') : null);
   const bar = $('#tb-actions'); bar.replaceChildren(
     S.me && S.me.console ? mk('tb-console', 'terminal', 'Console (Ctrl+`)', () => openConsole(), 'ac') : null,
+    mk('tb-tasks', 'tasks', 'Pending tasks: installs, updates', openTasks, 'warn'),
     mk('tb-bell', 'bell', 'Notifications', openNotifications, ''), h('span', { class: 'sep' }),
     mk('tb-theme', 'sun', 'Toggle light or dark', () => { window.ASTRA_THEME.toggle(); paintTheme(); }),
     mk('tb-settings', 'settings', 'Settings', () => go('settings')),
@@ -466,7 +476,7 @@ function buildTopbar() {
 }
 async function signOutAsk() {
   if (await confirmDlg({ title: 'Sign out?', text: 'You will need your username and password to get back in. Running installs keep going in the background.', ok: 'Sign out', icon: 'log-out' })) {
-    try { await req('/api/auth/logout', 'POST'); } catch { /* already out */ }
+    try { await req('api/auth/logout', 'POST'); } catch { /* already out */ }
     signedOut();
   }
 }
@@ -480,7 +490,7 @@ function signedOut(msg) {
   setTimeout(() => $('#user').focus(), 30);
 }
 async function start() {
-  const [me, ext] = await Promise.all([req('/api/me'), req('/api/extensions')]);
+  const [me, ext] = await Promise.all([req('api/me'), req('api/extensions')]);
   S.me = me; S.EXT = ext; S.started = true;
   $('#login').hidden = true; $('#app').hidden = false;
   $('#ver').textContent = 'v' + me.version;
@@ -490,7 +500,7 @@ async function start() {
   const p = parseHash(); S.current = p.id; S.sub = p.sub; route();
   pollFeed(); pollJobs();
   (S.timers || []).forEach(clearInterval);
-  S.timers = [setInterval(pollFeed, 30000), setInterval(pollJobs, 5000)];
+  S.timers = [setInterval(pollFeed, 30000 * window.ASTRA_THEME.pace()), setInterval(pollJobs, 5000 * window.ASTRA_THEME.pace())];
 }
 async function boot() {
   for (const id of ['art-logo', 'form-logo', 'mfa-logo', 'side-logo']) $('#' + id).replaceChildren(I('logo'));
@@ -516,7 +526,7 @@ async function boot() {
   $('#login-form').addEventListener('submit', async ev => {
     ev.preventDefault(); $('#login-err').textContent = ''; const btn = $('#login-go'); btn.disabled = true;
     try {
-      const r = await req('/api/auth/login', 'POST', { username: $('#user').value.trim(), password: $('#pass').value });
+      const r = await req('api/auth/login', 'POST', { username: $('#user').value.trim(), password: $('#pass').value });
       $('#pass').value = '';
       if (r.session) return await start();
       challenge = r.challenge;
@@ -525,15 +535,15 @@ async function boot() {
     } catch (e) { $('#login-err').textContent = e.message; } finally { btn.disabled = false; }
   });
   $('#mfa-method').addEventListener('change', mfaUi);
-  $('#mfa-send').addEventListener('click', async () => { try { await req('/api/auth/send', 'POST', { challenge }); toast('Code sent'); $('#mfa-code').focus(); } catch (e) { $('#mfa-err').textContent = e.message; } });
+  $('#mfa-send').addEventListener('click', async () => { try { await req('api/auth/send', 'POST', { challenge }); toast('Code sent'); $('#mfa-code').focus(); } catch (e) { $('#mfa-err').textContent = e.message; } });
   $('#mfa-back').addEventListener('click', () => signedOut());
   $('#mfa-form').addEventListener('submit', async ev => {
     ev.preventDefault(); $('#mfa-err').textContent = '';
-    try { await req('/api/auth/verify', 'POST', { challenge, method: $('#mfa-method').value, code: $('#mfa-code').value }); $('#mfa-code').value = ''; await start(); }
+    try { await req('api/auth/verify', 'POST', { challenge, method: $('#mfa-method').value, code: $('#mfa-code').value }); $('#mfa-code').value = ''; await start(); }
     catch (e) { $('#mfa-err').textContent = e.message; }
   });
   try {   // already signed in (cookie still valid)?  /api/auth/status never counts as a failed attempt
-    const st = await req('/api/auth/status');
+    const st = await req('api/auth/status');
     if (st.signed_in) return await start();
   } catch { /* fall through to the sign-in form */ }
   $('#login').hidden = false; $('#user').focus();
@@ -543,11 +553,11 @@ async function boot() {
 const ASTRA = {
   h, $, $$, I, req, call, post, card, kv, meter, badge, toast, showText, showKv, saveBlob, bytes, dur, when, ago, ansi, menu, kebab, modal, drawer,
   confirm: confirmDlg, prompt: promptDlg, emptyState, skeleton, pageHead, stateLevel, tpl, tplObj, renderSection, extView, dashboard, chart, safeParse,
-  go, loadModule, loadScript, loadCss, openConsole, watchJob, openNotifications, emit, Scope, boot, bus, closeMenu,
+  go, loadModule, loadScript, loadCss, openConsole, openTasks, watchJob, openNotifications, emit, Scope, boot, bus, closeMenu,
   sections: {}, settingsTabs: [], state: S,
   get timers() { return page.t; }, onLeave: f => page.onLeave(f), get page() { return page; },
   get EXT() { return S.EXT; }, get me() { return S.me; },
-  async refreshExtensions() { S.EXT = await req('/api/extensions'); buildNav(); },
+  async refreshExtensions() { S.EXT = await req('api/extensions'); buildNav(); },
   paintTheme,
 };
 window.ASTRA = ASTRA;

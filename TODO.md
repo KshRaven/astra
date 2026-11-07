@@ -1,15 +1,15 @@
 # TODO
 
-Not relied on by anything. Rarely worked on.
+## Windows / Windows Server validation
 
-## Windows / Windows Server (written, not run)
-- [ ] Run `install.ps1`, `uninstall.ps1`, `scripts/doctor.ps1`, `scripts/dev.ps1`, `tests/run.ps1`, `tests/demo.ps1` on Windows 10/11 and Server 2016/2019/2022.
-- [ ] Verify the ACL set by `astra init` on the config folder and the extensions-folder trust check (`extensions/__init__.py`, `_trusted`).
-- [ ] Security tab: Windows Update status check (skipped on Windows).
-- [ ] Confirm service, firewall (`netsh advfirewall`) and Task Scheduler extensions against localized Windows installs.
-- [ ] Desktop tab: the VNC/Openbox GUI session is Linux-only; the web desktop works everywhere.
-- [ ] Windows containers / Docker Desktop paths in the Docker tab.
+- [ ] Run `install.ps1`, `uninstall.ps1`, `scripts/doctor.ps1`, `scripts/dev.ps1`, `tests/run.ps1`, and `tests/demo.ps1` on supported Windows 10/11 and Server versions.
+- [ ] Verify the config-directory ACL created by `astra init` and the trust checks for user extensions on Windows.
+- [ ] Check the Security page's Windows-specific checks and document unsupported checks clearly.
+- [ ] Verify service, firewall (`netsh advfirewall`), and Task Scheduler behavior on localized Windows installations.
+- [ ] Verify Docker Desktop discovery, permissions, and container actions.
+- [ ] Test upgrade, reboot, and uninstall behavior for the SYSTEM scheduled task.
 
-## Rename (mypanel -> astra)
-- [ ] Linux upgrades migrate `/etc/mypanel` via `install.sh`. Remove that block once no old installs remain.
-- [ ] Update any external references (reverse proxy configs, bookmarks, scripts) to the new name.
+## Other validation and maintenance
+
+- [ ] Exercise the optional Linux desktop install/start/stop flow on a disposable Debian or Ubuntu host.
+- [ ] Review external examples and deployment references for the `astra` name when publishing releases.

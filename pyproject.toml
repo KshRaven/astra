@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "astra"
-version = "0.5.0"
+version = "0.10.0"
 description = "Server control panel for Linux and Windows: web GUI, terminal app, CLI and extensions. pip install ., then run astra."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = "MIT"
 # `pip install .` is all you need (also for development: pip install -e ".[dev]"). The web server, installer catalog,
 # console and notifications are pure standard library; the only dependency is the curses module the terminal
 # app uses on Windows.
@@ -27,4 +27,4 @@ astra = "astra.cli:main"
 include = ["astra*"]
 
 [tool.setuptools.package-data]
-astra = ["web/*", "web/ui/*", "legal/*.md"]
+astra = ["web/*", "web/ui/*"]

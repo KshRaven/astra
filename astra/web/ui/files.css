@@ -1,0 +1,22 @@
+.fm{display:flex;flex-direction:column;gap:.7rem}
+.fm-bar{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
+.fm-bar .sep{width:1px;height:1.4rem;background:var(--line);margin:0 .2rem}
+.fm-path{display:flex;align-items:center;gap:.15rem;flex-wrap:wrap;min-width:0;flex:1;font-size:.9rem}
+.fm-path button{border:0;background:transparent;min-height:1.8rem;padding:.1rem .5rem;border-radius:8px;font-weight:600}
+.fm-path button:hover{background:var(--hover)}.fm-path .ico{width:.9em;height:.9em;color:var(--muted)}
+.fm-box{position:relative;border:1px solid var(--line);border-radius:14px;background:var(--panel);overflow:hidden;outline:none}
+.fm-box:focus-visible{box-shadow:0 0 0 2px var(--ac)}
+.fm-list{max-height:calc(100vh - 17rem);min-height:16rem;overflow:auto}
+.fm-row{display:grid;grid-template-columns:2rem minmax(8rem,1fr) 6rem 11rem;gap:.5rem;align-items:center;padding:.42rem .8rem;border-bottom:1px solid var(--line);cursor:default;user-select:none;font-size:.88rem}
+.fm-row.head{position:sticky;top:0;z-index:1;background:var(--panel);font-size:.72rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);cursor:pointer}
+.fm-row.head span:hover{color:var(--fg)}
+.fm-row:not(.head):hover{background:var(--hover)}.fm-row.sel{background:var(--sel)}.fm-row.cut{opacity:.5}
+.fm-row.drop{outline:2px dashed var(--ac);outline-offset:-2px;background:var(--sel)}
+.fm-row .nm{display:flex;align-items:center;gap:.55rem;min-width:0}.fm-row .nm b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fm-row .ico{color:var(--muted)}.fm-row.dir .ico:first-child,.fm-row .dir-ic{color:var(--ac)}
+.fm-row .num{text-align:right;color:var(--muted)}.fm-row .dt{color:var(--muted)}
+.fm-over{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:color-mix(in srgb,var(--ac) 14%,var(--panel));border:2px dashed var(--ac);border-radius:14px;font-weight:700;z-index:3;pointer-events:none}
+.fm-box.over .fm-over{display:flex}
+.fm-foot{display:flex;gap:1rem;flex-wrap:wrap;justify-content:space-between;font-size:.78rem;color:var(--muted)}
+.fm-edit{width:100%;min-height:50vh;font-family:var(--mono,ui-monospace,monospace);font-size:.85rem;tab-size:4;white-space:pre;resize:vertical}
+@media(max-width:640px){.fm-row{grid-template-columns:2rem 1fr 5rem}.fm-row .dt{display:none}}

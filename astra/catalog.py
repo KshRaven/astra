@@ -4,7 +4,7 @@ Every entry says what the thing is, whether you need it, and how to install it w
 this machine (apt, dnf, zypper, pacman, apk, winget). Installs run as background jobs (jobs.py) so the panel can
 show live output and progress, and finish with a notification.
 """
-import glob as _glob, re, subprocess
+import glob as _glob, os, re, subprocess
 from . import config, plat
 from .errors import PanelError
 
@@ -13,10 +13,101 @@ CATS = ["Web servers", "Languages", "Databases", "Containers", "Protection", "To
 
 
 def _e(id, title, cat, summary, need, skip, pkgs, units=(), glob=None, bins=(), ports=(), size="", url="",
-       win=None, win_note="", data=False, conflicts=(), post=None, icon="box"):
+       win=None, win_note="", data=False, conflicts=(), post=None, icon="box", win_units=None, win_bins=None,
+       win_choco="", win_plan=None):
     return {"id": id, "title": title, "category": cat, "summary": summary, "need": need, "skip": skip, "pkgs": pkgs,
             "units": list(units), "glob": glob, "bins": list(bins), "ports": list(ports), "size": size, "url": url,
-            "win": win, "win_note": win_note, "data": data, "conflicts": list(conflicts), "post": post, "icon": icon}
+            "win": win, "win_note": win_note, "data": data, "conflicts": list(conflicts), "post": post, "icon": icon,
+            "win_units": list(win_units or []), "win_bins": list(win_bins or []), "win_choco": win_choco, "win_plan": win_plan}
+
+# ---------------------------------------------------------------- Windows install helpers (headless, no wizards)
+NGINX_ZIP = "https://nginx.org/download/nginx-1.28.0.zip"
+
+
+def _ps_step(script, optional=False):
+    step = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "$ProgressPreference='SilentlyContinue';" + script]
+    return {"cmd": step, "optional": True} if optional else step
+
+
+def _win_nginx_install():
+    """Download the official nginx zip to <SystemDrive>\\nginx, wire in sites-enabled, start it now and at boot."""
+    def step():
+        import io, os, shutil, urllib.request, zipfile
+        root = os.environ.get("SystemDrive", "C:") + "\\nginx"
+        if os.path.exists(os.path.join(root, "nginx.exe")):
+            return f"nginx is already in {root}"
+        data = urllib.request.urlopen(NGINX_ZIP, timeout=120).read()
+        tmp = root + "-unpack"
+        shutil.rmtree(tmp, ignore_errors=True)
+        zipfile.ZipFile(io.BytesIO(data)).extractall(tmp)
+        inner = os.path.join(tmp, os.listdir(tmp)[0])
+        shutil.move(inner, root)
+        shutil.rmtree(tmp, ignore_errors=True)
+        for d in ("sites-available", "sites-enabled"):
+            os.makedirs(os.path.join(root, "conf", d), exist_ok=True)
+        conf = os.path.join(root, "conf", "nginx.conf")
+        text = open(conf, encoding="utf-8").read()
+        if "sites-enabled" not in text:
+            open(conf, "w", encoding="utf-8", newline="\\n").write(text.replace("http {", "http {\\n    include sites-enabled/*;", 1))
+        open(os.path.join(root, ".astra-installed"), "w").write(NGINX_ZIP)
+        if root not in config.cfg["bin_dirs"]:
+            config.cfg["bin_dirs"].append(root)
+            config.save()
+        return f"nginx unpacked to {root}"
+    return [step,
+            {"cmd": ["schtasks", "/create", "/tn", "Astra\\Nginx", "/tr", '"' + os.environ.get("SystemDrive", "C:") + '\\nginx\\nginx.exe" -p ' + os.environ.get("SystemDrive", "C:") + "\\nginx",
+                     "/sc", "onstart", "/ru", "SYSTEM", "/rl", "HIGHEST", "/f"], "optional": True},
+            {"cmd": ["schtasks", "/run", "/tn", "Astra\\Nginx"], "optional": True}]
+
+
+def _win_nginx_remove():
+    def step():
+        import os, shutil
+        root = os.environ.get("SystemDrive", "C:") + "\\nginx"
+        if os.path.exists(os.path.join(root, ".astra-installed")):
+            shutil.rmtree(root, ignore_errors=True)
+            return f"removed {root}"
+        return f"{root} was not installed by astra: left in place"
+    return [{"cmd": ["schtasks", "/end", "/tn", "Astra\\Nginx"], "optional": True},
+            {"cmd": ["taskkill", "/IM", "nginx.exe", "/F"], "optional": True},
+            {"cmd": ["schtasks", "/delete", "/tn", "Astra\\Nginx", "/f"], "optional": True}, step]
+
+
+def _win_ssh_install():
+    return [_ps_step("Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Host"),
+            _ps_step("Set-Service -Name sshd -StartupType Automatic; Start-Service sshd"),
+            _ps_step("if (-not (Get-NetFirewallRule -Name 'astra-OpenSSH' -ErrorAction SilentlyContinue)) { New-NetFirewallRule -Name 'astra-OpenSSH' -DisplayName 'Astra: OpenSSH (22)' -Direction Inbound -Protocol TCP -LocalPort 22 -Action Allow | Out-Null }", optional=True)]
+
+
+def _win_ssh_remove():
+    return [_ps_step("Stop-Service sshd -ErrorAction SilentlyContinue", optional=True),
+            _ps_step("Remove-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Host"),
+            _ps_step("Remove-NetFirewallRule -Name 'astra-OpenSSH' -ErrorAction SilentlyContinue", optional=True)]
+
+
+def _smtp_local():
+    """After a local mail server is installed, point the panel's SMTP settings at it (only if nothing is configured)."""
+    def step():
+        import socket
+        s = config.cfg["smtp"]
+        if s.get("host"):
+            return "SMTP settings were already filled in: left unchanged."
+        s.update(host="127.0.0.1", port=25, security="none", user="", password="", **{"from": "astra@" + (socket.getfqdn() or "localhost")})
+        config.save()
+        return "Panel SMTP now points at the local mail server (127.0.0.1:25). Settings > Two-step sign-in can use it."
+    return step
+
+
+def _allow_existing_win(e):
+    def step():
+        names = [u for u in (e["win_units"] or e["units"]) if win_service(u)]
+        added = [u for u in names if u not in config.cfg["services"]]
+        if added:
+            config.cfg["services"].extend(added)
+            config.save()
+        return f"Added to the managed services list: {', '.join(added)}" if added else ""
+    return step
+
 
 
 CATALOG = [
@@ -26,8 +117,9 @@ CATALOG = [
        "You only use the panel for files, tasks and monitoring.",
        {"apt": ["nginx"], "dnf": ["nginx"], "zypper": ["nginx"], "pacman": ["nginx"], "apk": ["nginx"]},
        units=["nginx"], bins=["nginx"], ports=[80, 443], size="about 2 MB", url="https://nginx.org/en/docs/",
-       win_note="Nginx has no installer for Windows. Download the zip from nginx.org, unzip it (for example to C:\\nginx) and add the folder to bin_dirs.",
-       conflicts=["apache"], icon="globe"),
+       win_note="Windows: the panel downloads the official zip from nginx.org into C:\\nginx, starts it and registers a startup task. No wizard.",
+       win_plan={"install": lambda: _win_nginx_install(), "uninstall": lambda: _win_nginx_remove()},
+       win_bins=["nginx"], conflicts=["apache"], icon="globe"),
     _e("apache", "Apache HTTP Server", "Web servers",
        "The classic web server. Works with .htaccess files and many PHP applications.",
        "An application you run insists on Apache or .htaccess rules.",
@@ -48,7 +140,7 @@ CATALOG = [
        "Your sites are static files or Node/Python apps.",
        {"apt": ["php-fpm"], "dnf": ["php-fpm"], "zypper": ["php-fpm"], "pacman": ["php-fpm"], "apk": ["php-fpm"]},
        units=["php-fpm"], glob="php*-fpm", bins=["php-fpm"], size="about 25 MB", url="https://www.php.net/manual/",
-       icon="code"),
+       win="PHP.PHP.8.3", win_bins=["php-cgi", "php"], win_note="Windows installs PHP as php.exe / php-cgi.exe (no background service).", icon="code"),
     _e("nodejs", "Node.js", "Languages",
        "JavaScript runtime with npm. Needed to run many modern web apps and build tools.",
        "You deploy a Node app (Express, Next.js, a bot...). Put it behind a proxy site in the Websites tab.",
@@ -67,21 +159,21 @@ CATALOG = [
        "You do not run database-backed apps, or you prefer PostgreSQL. MariaDB and MySQL share port 3306: run one.",
        {"apt": ["mariadb-server"], "dnf": ["mariadb-server"], "zypper": ["mariadb"], "pacman": ["mariadb"], "apk": ["mariadb", "mariadb-client"]},
        units=["mariadb", "mysql"], bins=["mariadbd"], ports=[3306], size="about 120 MB", url="https://mariadb.com/kb/en/documentation/",
-       win="MariaDB.Server", data=True, conflicts=["mysql"], icon="database"),
+       win="MariaDB.Server", win_units=["MariaDB", "MySQL"], win_bins=["mariadbd", "mysqld", "mysql"], data=True, conflicts=["mysql"], icon="database"),
     _e("mysql", "MySQL", "Databases",
        "The original MySQL server (Oracle). Use it only if you specifically need MySQL rather than MariaDB.",
        "A vendor requires real MySQL.",
        "Almost always: MariaDB does the same job and is the usual choice.",
        {"apt": ["mysql-server"], "dnf": ["mysql-server"], "zypper": ["mysql"]},
        units=["mysql", "mysqld"], bins=["mysqld"], ports=[3306], size="about 200 MB", url="https://dev.mysql.com/doc/",
-       data=True, conflicts=["mariadb"], icon="database"),
+       win="Oracle.MySQL", win_units=["MySQL80", "MySQL"], win_bins=["mysqld", "mysql"], data=True, conflicts=["mariadb"], icon="database"),
     _e("postgresql", "PostgreSQL", "Databases",
        "Advanced open-source database with strong standards support and extensions.",
        "An application asks for PostgreSQL, or you want a robust database for your own projects.",
        "You only need MySQL/MariaDB.",
        {"apt": ["postgresql"], "dnf": ["postgresql-server", "postgresql-contrib"], "zypper": ["postgresql-server"], "pacman": ["postgresql"], "apk": ["postgresql"]},
        units=["postgresql"], bins=["postgres"], ports=[5432], size="about 150 MB", url="https://www.postgresql.org/docs/",
-       win="PostgreSQL.PostgreSQL.16", data=True, post="pg_init", icon="database"),
+       win="PostgreSQL.PostgreSQL.16", win_units=["postgresql-x64-16", "postgresql-x64-17", "postgresql-x64-15"], win_bins=["postgres", "psql"], data=True, post="pg_init", icon="database"),
     _e("redis", "Redis", "Databases",
        "In-memory key-value store used for caching, sessions and queues.",
        "An app or framework asks for Redis (Laravel, Django cache, Sidekiq, Nextcloud...).",
@@ -107,7 +199,8 @@ CATALOG = [
        "You run software directly on the server.",
        {"apt": ["docker.io"], "dnf": ["moby-engine"], "zypper": ["docker"], "pacman": ["docker"], "apk": ["docker"]},
        units=["docker"], bins=["docker"], size="about 250 MB", url="https://docs.docker.com/engine/", win="Docker.DockerDesktop",
-       win_note="Windows has no headless Docker service: Docker Desktop (with WSL 2) is the supported way, and it must be started once after install.",
+       win_note="Windows has no headless Docker service: Docker Desktop (with WSL 2) is the supported way. Open it once after the install; the Docker tab can start it for you.",
+       win_units=["com.docker.service"], win_bins=["docker"],
        data=True, icon="box"),
     _e("ufw", "UFW firewall", "Protection",
        "Simple firewall front-end. The Firewall tab manages its rules.",
@@ -127,7 +220,9 @@ CATALOG = [
        "You administer this machine from another computer.",
        "You only have physical or console access, or already use SSH.",
        {"apt": ["openssh-server"], "dnf": ["openssh-server"], "zypper": ["openssh"], "pacman": ["openssh"], "apk": ["openssh"]},
-       units=["ssh", "sshd"], bins=["sshd"], ports=[22], size="about 2 MB", url="https://www.openssh.com/manual.html", icon="terminal"),
+       units=["ssh", "sshd"], bins=["sshd"], ports=[22], size="about 2 MB", url="https://www.openssh.com/manual.html", icon="terminal",
+       win_units=["sshd"], win_bins=["sshd"], win_plan={"install": lambda: _win_ssh_install(), "uninstall": lambda: _win_ssh_remove()},
+       win_note="Windows: installed as the built-in optional feature (headless) and started at boot."),
     _e("cron", "Cron scheduler", "Tools",
        "Runs commands on a schedule. The Tasks tab writes its jobs here.",
        "You want scheduled tasks (backups, clean-ups, renewals).",
@@ -141,6 +236,21 @@ CATALOG = [
        "Systemd units or Docker already supervise your programs.",
        {"apt": ["supervisor"], "dnf": ["supervisor"], "zypper": ["supervisor"], "pacman": ["supervisor"], "apk": ["supervisor"]},
        units=["supervisor", "supervisord"], bins=["supervisord"], size="about 3 MB", url="http://supervisord.org/", icon="server"),
+    _e("python", "Python 3", "Languages",
+       "Python runtime and pip. Needed for Django/Flask apps, scripts and many admin tools.",
+       "You deploy a Python app or run Python scripts as scheduled tasks.",
+       "You do not run Python software (the panel itself already has its own Python).",
+       {"apt": ["python3", "python3-pip", "python3-venv"], "dnf": ["python3", "python3-pip"], "zypper": ["python3", "python3-pip"], "pacman": ["python", "python-pip"], "apk": ["python3", "py3-pip"]},
+       bins=["python3", "python"], size="about 40 MB", url="https://docs.python.org/3/", win="Python.Python.3.12", icon="code"),
+    _e("postfix", "Mail server (Postfix / hMailServer)", "Tools",
+       "A mail server on this machine. Lets the panel send e-mail (sign-in codes, alerts) and your sites send their own mail.",
+       "You want e-mail sign-in codes or your apps send mail (password resets, contact forms) and you have no outside mail service.",
+       "You already use an outside SMTP service (Gmail, Mailgun, your host): fill it in under Settings instead.",
+       {"apt": ["postfix"], "dnf": ["postfix"], "zypper": ["postfix"], "pacman": ["postfix"], "apk": ["postfix"]},
+       units=["postfix"], bins=["postfix", "postconf"], ports=[25], size="about 5 MB", url="https://www.postfix.org/documentation.html",
+       win_choco="hmailserver", win_units=["hMailServer"], win_bins=[],
+       win_note="Windows has no built-in mail server: this installs hMailServer through Chocolatey (install Chocolatey first). Set its administrator password in the hMailServer Administrator tool afterwards.",
+       data=True, icon="mail"),
 ]
 BY_ID = {e["id"]: e for e in CATALOG}
 _PM_FAMILY = {"yum": "dnf"}
@@ -219,17 +329,25 @@ def units_of(entry, table):
     return found
 
 
+def _wunits(e):
+    return e["win_units"] or e["units"]
+
+
+def _wbins(e):
+    return e["win_bins"] if e["win_bins"] else e["bins"]
+
+
 def installed(entry, table=None):
     if WIN:
-        if any(plat.which(b) for b in entry["bins"]):
+        if any(plat.which(b) for b in _wbins(entry)):
             return True
-        return any(win_service(u) for u in entry["units"])
+        return any(win_service(u) for u in _wunits(entry))
     table = unit_table() if table is None else table
     return bool(units_of(entry, table)) or any(plat.which(b) for b in entry["bins"])
 
 
 def version(entry):
-    for b in entry["bins"]:
+    for b in (_wbins(entry) if WIN else entry["bins"]):
         exe = plat.which(b)
         if exe:
             rc, out = _run([exe, "--version"], 6)
@@ -254,7 +372,7 @@ def listing():
             state = "active" if any(r[0] == "active" for r in running) else "failed" if any(r[0] == "failed" for r in running) else "inactive"
             enabled = running[0][1]
         elif inst and WIN:
-            for u in e["units"]:
+            for u in _wunits(e):
                 s = win_service(u)
                 if s:
                     state, enabled = s
@@ -263,7 +381,7 @@ def listing():
                      "summary": e["summary"], "need": e["need"], "skip": e["skip"], "ports": e["ports"],
                      "size": e["size"], "url": e["url"], "installed": inst, "state": state if inst else "not-installed",
                      "enabled": enabled, "units": units, "data": e["data"], "conflicts": e["conflicts"],
-                     "can_install": bool(_pkgs(e, pm)) or bool(WIN and e["win"] and pm), "note": e["win_note"] if WIN else ""})
+                     "can_install": bool(_pkgs(e, pm)) or bool(WIN and (e["win_plan"] or ((e["win"] or e["win_choco"]) and pm))), "note": e["win_note"] if WIN else ""})
     return rows
 
 
@@ -319,16 +437,26 @@ def install_plan(id):
     """(title, steps, env). A step is an argv list, {'cmd': argv, 'optional': True}, or a function returning text."""
     e = get(id)
     pm = plat.pkg_manager()
-    if not pm:
+    if not pm and not (WIN and e["win_plan"]):
         raise PanelError("no supported package manager found (apt, dnf, zypper, pacman, apk, winget)", 501)
     _need_admin("Installing software")
     if WIN:
-        if not e["win"]:
+        title = f"Install {e['title']}"
+        if e["win_plan"]:
+            steps = list(e["win_plan"]["install"]())
+        elif e["win"] and pm == "winget":
+            steps = [["winget", "install", "--id", e["win"], "-e", "--silent", "--accept-package-agreements", "--accept-source-agreements"]]
+        elif pm == "choco" and (e["win_choco"] or e["win"]):
+            steps = [["choco", "install", e["win_choco"] or e["win"].split(".")[-1].lower(), "-y"]]
+        elif e["win_choco"] and plat.which("choco"):
+            steps = [["choco", "install", e["win_choco"], "-y"]]
+        else:
             raise PanelError(e["win_note"] or f"{e['title']} cannot be installed automatically on Windows.", 501)
-        if pm == "winget":
-            return f"Install {e['title']}", [["winget", "install", "--id", e["win"], "-e", "--silent",
-                                              "--accept-package-agreements", "--accept-source-agreements"]], {}
-        return f"Install {e['title']}", [["choco", "install", e["win"].split(".")[-1].lower(), "-y"]], {}
+        if _wunits(e):
+            steps.append(_allow_existing_win(e))
+        if e["id"] == "postfix":
+            steps.append(_smtp_local())
+        return title, steps, {}
     pkgs = _pkgs(e, pm)
     if not pkgs:
         raise PanelError(f"{e['title']} has no known package for {pm}. Install it by hand.", 501)
@@ -357,16 +485,23 @@ def install_plan(id):
 def uninstall_plan(id):
     e = get(id)
     pm = plat.pkg_manager()
-    if not pm:
+    if not pm and not (WIN and e["win_plan"]):
         raise PanelError("no supported package manager found", 501)
     _need_admin("Removing software")
     table = unit_table()
     units = units_of(e, table)
     if WIN:
-        if not e["win"]:
+        if e["win_plan"]:
+            return f"Remove {e['title']}", list(e["win_plan"]["uninstall"]()) + [_unmanage(_wunits(e))], {}
+        if e["win"] and pm == "winget":
+            cmd = ["winget", "uninstall", "--id", e["win"], "-e", "--silent"]
+        elif pm == "choco" and (e["win_choco"] or e["win"]):
+            cmd = ["choco", "uninstall", e["win_choco"] or e["win"].split(".")[-1].lower(), "-y"]
+        elif e["win_choco"] and plat.which("choco"):
+            cmd = ["choco", "uninstall", e["win_choco"], "-y"]
+        else:
             raise PanelError(f"{e['title']} was not installed by the panel on Windows. Remove it from Settings > Apps.", 501)
-        cmd = ["winget", "uninstall", "--id", e["win"], "-e", "--silent"] if pm == "winget" else ["choco", "uninstall", e["win"].split(".")[-1].lower(), "-y"]
-        return f"Remove {e['title']}", [cmd], {}
+        return f"Remove {e['title']}", [cmd, _unmanage(_wunits(e))], {}
     pkgs = _pkgs(e, pm)
     if not pkgs:
         raise PanelError(f"{e['title']} has no known package for {pm}.", 501)
@@ -386,12 +521,52 @@ def uninstall_plan(id):
     return f"Remove {e['title']}", steps, env
 
 
+def update_plan(id):
+    """Upgrade one piece of software to the newest version the package manager offers."""
+    e = get(id)
+    pm = plat.pkg_manager()
+    if not pm:
+        raise PanelError("no supported package manager found", 501)
+    _need_admin("Updating software")
+    if WIN:
+        if e["win"] and pm == "winget":
+            return f"Update {e['title']}", [["winget", "upgrade", "--id", e["win"], "-e", "--silent", "--accept-package-agreements", "--accept-source-agreements"]], {}
+        if pm == "choco" and (e["win_choco"] or e["win"]):
+            return f"Update {e['title']}", [["choco", "upgrade", e["win_choco"] or e["win"].split(".")[-1].lower(), "-y"]], {}
+        raise PanelError(f"{e['title']} cannot be updated automatically on Windows (reinstall it from the library).", 501)
+    pkgs = _pkgs(e, pm)
+    if not pkgs:
+        raise PanelError(f"{e['title']} has no known package for {pm}.", 501)
+    env = {"DEBIAN_FRONTEND": "noninteractive", "NEEDRESTART_MODE": "a", "LC_ALL": "C"}
+    steps = {"apt": [["apt-get", "update"], ["apt-get", "install", "-y", "--only-upgrade", "-o", "Dpkg::Options::=--force-confold", *pkgs]],
+             "dnf": [["dnf", "upgrade", "-y", *pkgs]], "zypper": [["zypper", "--non-interactive", "update", *pkgs]],
+             "pacman": [["pacman", "-S", "--noconfirm", "--needed", *pkgs]], "apk": [["apk", "add", "-u", *pkgs]]}[pm]
+    return f"Update {e['title']}", steps, env
+
+
+def system_update_plan():
+    """Update everything the package manager owns. (Windows itself is updated by Windows Update, not by this.)"""
+    pm = plat.pkg_manager()
+    if not pm:
+        raise PanelError("no supported package manager found", 501)
+    _need_admin("Updating the system")
+    if WIN:
+        if pm == "winget":
+            return "Update all apps (winget)", [["winget", "upgrade", "--all", "--silent", "--accept-package-agreements", "--accept-source-agreements"]], {}
+        return "Update all apps (Chocolatey)", [["choco", "upgrade", "all", "-y"]], {}
+    env = {"DEBIAN_FRONTEND": "noninteractive", "NEEDRESTART_MODE": "a", "LC_ALL": "C"}
+    steps = {"apt": [["apt-get", "update"], ["apt-get", "upgrade", "-y", "-o", "Dpkg::Options::=--force-confold"]],
+             "dnf": [["dnf", "upgrade", "-y"]], "zypper": [["zypper", "--non-interactive", "update"]],
+             "pacman": [["pacman", "-Syu", "--noconfirm"]], "apk": [["apk", "update"], ["apk", "upgrade"]]}[pm]
+    return "Update the system packages", steps, env
+
+
 def detail(id):
     e = get(id)
     table = unit_table()
     row = next(r for r in listing() if r["id"] == id)
     pm = plat.pkg_manager() or "none"
-    pk = _pkgs(e, pm) if not WIN else [e["win"]] if e["win"] else []
+    pk = _pkgs(e, pm) if not WIN else [e["win"]] if e["win"] else [e["win_choco"]] if e["win_choco"] else (["official zip / Windows feature"] if e["win_plan"] else [])
     pairs = [["What it is", e["summary"]], ["You need it if", e["need"]], ["You can skip it if", e["skip"]]]
     if e["ports"]:
         pairs.append(["Ports", ", ".join(map(str, e["ports"]))])

@@ -23,7 +23,7 @@ def _name(p):
 
 
 def _catalog_units():
-    return {u for e in catalog.CATALOG for u in e["units"]}
+    return {u for e in catalog.CATALOG for u in list(e["units"]) + list(e["win_units"])}
 
 
 def _allowed(p):
@@ -115,6 +115,20 @@ def uninstall_(p):
     return {"job": j.id, "title": title}
 
 
+@EXT.route("update", write=True)
+def update_(p):
+    title, steps, env = catalog.update_plan(str(p.get("id", "")))
+    j = jobs.start(title, steps, kind="install", env=env, ext="services")
+    return {"job": j.id, "title": title}
+
+
+@EXT.route("update_system", write=True)
+def update_system(p):
+    title, steps, env = catalog.system_update_plan()
+    j = jobs.start(title, steps, kind="install", env=env, ext="services")
+    return {"job": j.id, "title": title}
+
+
 @EXT.route("action", write=True)
 def action(p):
     n, op = _allowed(p), p.get("op")
@@ -164,6 +178,7 @@ if not WIN:  # systemd can reload a unit's configuration without a restart; Wind
 _INST_ACTIONS = [{"label": "Start", "route": "action", "params": {"name": "$unit", "op": "start"}, "if": {"state": ["inactive", "failed"]}},
                  {"label": "Restart", "route": "action", "params": {"name": "$unit", "op": "restart"}, "if": {"state": ["active"]}},
                  {"label": "Stop", "route": "action", "params": {"name": "$unit", "op": "stop"}, "danger": True, "confirm": "Stop $name?", "if": {"state": ["active"]}},
+                 {"label": "Update to newest", "route": "update", "params": {"id": "$id"}, "more": True, "confirm": "Update $name? It is queued; progress shows under Tasks."},
                  {"label": "Details", "route": "detail", "method": "GET", "params": {"id": "$id"}, "more": True, "quiet": True}]
 
 EXT.sections = [
@@ -182,6 +197,12 @@ EXT.sections = [
                        "text": "Open the Software library to see what you can install, with a short explanation of each.",
                        "actions": [{"label": "Browse the library", "go": "services", "sub": "library", "primary": True, "icon": "package"}]}}]},
         {"id": "library", "title": "Software library", "icon": "package", "sections": [{"type": "catalog", "source": "catalog", "detail": "detail", "install": "install", "uninstall": "uninstall"}]},
+        {"id": "updates", "title": "Updates", "icon": "refresh", "sections": [
+            {"type": "notice", "level": "info", "title": "Keep the server patched",
+             "text": "Updates are queued and run one after another (see the Tasks button next to the console). Updating packages can restart services, so do it at a quiet time."
+                     + (" Windows itself is updated by Windows Update: this updates apps installed with winget or Chocolatey." if WIN else ""),
+             "actions": [{"label": "Update all packages", "route": "update_system", "primary": True, "icon": "refresh",
+                          "confirm": "Update every package on this server? This can take a while and may restart services."}]}]},
         {"id": "other", "title": "Other services", "icon": "list", "sections": [
             {"type": "table", "title": "Watched services", "desc": "Services you added by name. The panel can start, stop and restart these.", "source": "list", "refresh": 10,
              "columns": [["Service", "name"], ["State", "state", "state"], ["At boot", "enabled", "state"]], "actions": _ACTIONS,

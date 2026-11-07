@@ -1,6 +1,6 @@
 """Start/stop the web panel in the background (`astra start`, `astra stop`) without systemd or a Windows service.
 The foreground `astra web` also writes the pid file, so `astra stop` works for both."""
-import os, socket, subprocess, sys, time
+import os, re, socket, subprocess, sys, time
 from . import config, plat
 
 
@@ -78,20 +78,91 @@ def start():
     return False, f"did not start in time: see {config.LOGDIR / 'panel-out.log'}"
 
 
-def stop():
-    p = pid()
-    if p is None:
-        return (False, "the panel is running but was not started by astra (service?). Stop it with: "
-                       + ("schtasks /end /tn AstraPanel" if plat.IS_WIN else "systemctl stop astra")) if listening() else (True, "not running")
+def _run(cmd, timeout=20):
     try:
-        if plat.IS_WIN:
-            subprocess.run(["taskkill", "/PID", str(p), "/T", "/F"], capture_output=True, creationflags=plat.NO_WINDOW)
-        else:
-            os.kill(p, 15)
-    except OSError as e:
-        return False, str(e)
-    for _ in range(30):
-        time.sleep(0.15)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, creationflags=plat.NO_WINDOW,
+                           stdin=subprocess.DEVNULL)
+        return r.returncode, (r.stdout or "") + (r.stderr or "")
+    except (OSError, subprocess.SubprocessError) as e:
+        return 1, str(e)
+
+
+def listener_pids():
+    """Process ids that are listening on the panel port (whoever started them)."""
+    port = int(config.cfg["port"])
+    found = set()
+    if plat.IS_WIN:
+        _, out = _run(["netstat", "-ano", "-p", "tcp"])
+        for line in out.splitlines():
+            f = line.split()
+            if len(f) >= 5 and f[3].upper() == "LISTENING" and f[1].rsplit(":", 1)[-1] == str(port) and f[4].isdigit():
+                found.add(int(f[4]))
+    else:
+        _, out = _run(["ss", "-ltnpH", f"sport = :{port}"])
+        found.update(int(m) for m in re.findall(r"pid=(\d+)", out))
+        if not found:
+            _, out = _run(["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"])
+            found.update(int(x) for x in out.split() if x.isdigit())
+    found.discard(os.getpid())
+    return found
+
+
+def _cmdline(p):
+    if plat.IS_WIN:
+        _, out = _run(["powershell", "-NoProfile", "-Command",
+                       f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(p)}').CommandLine"])
+        return out.strip()
+    try:
+        return open(f"/proc/{int(p)}/cmdline", "rb").read().replace(b"\0", b" ").decode(errors="replace")
+    except OSError:
+        return ""
+
+
+def _kill(p):
+    if plat.IS_WIN:
+        return _run(["taskkill", "/PID", str(p), "/T", "/F"])[0] == 0
+    try:
+        os.kill(p, 15)
+        return True
+    except OSError:
+        return False
+
+
+def _wait_down(n=30):
+    for _ in range(n):
         if not listening():
-            break
+            return True
+        time.sleep(0.15)
+    return not listening()
+
+
+def stop():
+    """Stop the panel however it was started: pid file, boot service/task, or (last resort) whatever astra
+    process is listening on the panel port."""
+    p = pid()
+    if p is not None:
+        _kill(p)
+        _wait_down()
+        try:
+            pidfile().unlink()
+        except OSError:
+            pass
+    if not listening():
+        return True, "stopped" if p is not None else "not running"
+    # started by the boot service / scheduled task, or from another config folder
+    if plat.IS_WIN:
+        _run(["schtasks", "/end", "/tn", "AstraPanel"])
+    else:
+        _run(["systemctl", "stop", "astra"], 60)
+    if not _wait_down(20):
+        for lp in listener_pids():
+            cl = _cmdline(lp).lower()
+            if "astra" in cl or "-m astra" in cl:
+                _kill(lp)
+        _wait_down()
+    if listening():
+        owners = ", ".join(map(str, sorted(listener_pids()))) or "unknown"
+        return False, (f"something is still listening on port {config.cfg['port']} (pid {owners}). "
+                       + ("Run this from an Administrator terminal" if plat.IS_WIN else "Run this with sudo")
+                       + ", or it is not an astra process.")
     return True, "stopped"

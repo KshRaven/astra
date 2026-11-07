@@ -1,52 +1,64 @@
-# Writing extensions
+# Writing Extensions
 
-An extension is one Python file that defines **routes** (the API) and **sections** (the GUI tab). The same routes work from the web GUI and from `astra call`.
+An extension is a Python module exposing `EXT = Extension(...)`. It can register API routes and declarative GUI sections. Built-ins live in `astra/extensions/`; user extensions are loaded from `<config directory>/extensions/*.py`. Extensions run in-process with the full privileges of the Astra process. Review code before installing it.
 
 ```python
 from astra.extensions import Extension
 from astra.shell import run, need, NAME
-from astra.errors import PanelError
 
-EXT = Extension("redis", "Redis", "🧰", order=75, requires=["redis-cli"], description="Redis keys")
+EXT = Extension("redis", "Redis", "box", order=75,
+                requires=["redis-cli"], description="Redis status and controls")
 
-@EXT.route("info")                       # GET /api/ext/redis/info
-def info(p):
+@EXT.route("info")
+def info(params):
     return {"text": run(["redis-cli", "info", "server"], check=True)[1]}
 
-@EXT.route("flush", write=True)          # POST only, audited
-def flush(p):
+@EXT.route("flush", write=True)
+def flush(params):
     run(["redis-cli", "flushdb"], check=True)
     return {"ok": True}
 
 EXT.sections = [
     {"type": "text", "title": "Server info", "source": "info"},
-    {"type": "form", "title": "Danger zone", "route": "flush", "submit": "Flush DB", "fields": []},
+    {"type": "form", "title": "Flush database", "route": "flush",
+     "submit": "Flush DB", "confirm": "Delete all keys?", "danger": True,
+     "fields": []},
 ]
 ```
 
-Install: copy to `/etc/astra/extensions/redis.py` (owned by the panel user, not group/world-writable, otherwise it is skipped) and `systemctl restart astra`. Disable built-ins with `disabled_extensions`.
+Copy the file to the active config directory's `extensions` folder, then restart Astra. The directory is `/etc/astra/extensions` for root on Linux, `%ProgramData%\astra\extensions` for an elevated Windows install, or `~/.astra/extensions` for an unprivileged user unless `ASTRA_HOME` is set. On Linux, extension files must be owned by the panel user and not group/world-writable. On Windows, symbolic links are refused and the config directory ACL should protect the files. Disable an extension by adding its name to `disabled_extensions`.
 
-## Route rules
+## Routes
 
-- A route receives one dict of parameters (query string for GET, JSON body for POST). Values are untrusted: validate with `need(value, regex, "what")`.
-- Return JSON-serialisable data, or `Raw(bytes, content_type, filename)` for downloads.
-- Raise `PanelError("message", status)` for expected failures; anything else becomes a generic 500 and is logged.
-- Run commands with `run([...])` (argument list). Never build a shell string.
-- Anything that changes the system must use `write=True`; it then requires POST and is written to the audit log.
+- A route function receives one dictionary of parameters. HTTP GET parameters come from the query string; POST parameters come from a JSON object.
+- Treat every parameter as untrusted. Validate strings with `need(value, regex, "description")` and use the provided validators such as `NAME` where appropriate.
+- Mark every side-effecting route with `write=True`. This makes the HTTP handler require POST and records the action in the audit log. A route not marked `write=True` is not automatically audited.
+- Return JSON-serializable values, or `Raw(data, content_type, filename)` for a file download.
+- Raise `PanelError("message", status)` for expected errors. Unexpected exceptions are returned as a generic 500 and written to the panel log.
+- Use `run([...])` for subprocesses. It resolves configured executable paths and avoids shell parsing; do not construct shell commands from route parameters.
+- `astra call EXT ROUTE key=value` invokes the route locally in the current OS process, without web authentication. It still audits routes marked as writes.
 
-## Section types
+## Declarative UI Sections
 
-| type | fields |
+Set `EXT.sections` to a list, or to a function that returns the list when the page is opened. Supported section `type` values:
+
+| Type | Main properties |
 |---|---|
-| `table` | `title`, `source` (route returning a list of dicts), `columns` = `[[label, key, format?]]` (format: `bytes`, `time`, `state`), `actions`, `refresh` (seconds) |
-| `form` | `title`, `route`, `method` (default POST), `submit`, `fields` = `{name,label,type: text/number/password/select, options, placeholder, required, value}`. If the route returns `{"text": ...}` it is shown under the form |
-| `text` | `title`, `source` (returns `{"text": ...}`) |
-| `files` | the built-in file manager |
+| `stats` | `items` for static values or `source` route; optional `refresh` |
+| `notice` | `title`, `text`, `level`, optional `actions` |
+| `help` | `title`, `text`, optional `steps` and `example` |
+| `table` | `title`, `source`, `columns`, optional `actions`, `buttons`, `refresh`, search/sort options |
+| `form` | `title`, `route`, `method` (defaults to POST), `submit`, `fields`, optional `confirm` and `danger` |
+| `text` | `title`, `source` route returning `{"text": "..."}` |
+| `kv` | `title`, `source` route returning pairs or key/value data |
+| `catalog` | Software catalog view with `source` and optional `detail`, `install`, and `uninstall` routes |
+| `tabs` | `tabs`, each with an `id`, `title`, and its own `sections` list |
+| `files` | Built-in file manager view |
 
-Row action: `{"label", "route", "params": {"id": "$id"}, "method": "GET|POST", "confirm": "Delete $name?", "danger": true, "download": true}`. `$key` is replaced by that row's value. If an action returns `{"text": ...}` it is shown in a dialog.
+Table columns may be `[label, key, format]`; formats include `bytes`, `time`, `ago`, `state`, `num`, `pct`, `mono`, `code`, `bool`, `list`, `level`, and `dur`. A row action can define `label`, `route`, `params`, `method`, `confirm`, `danger`, `download`, `form`, `filename`, `if`, and `ifnot`. `$key` placeholders in action strings are filled from the current row. A response containing `{"text": "..."}` is displayed as text; a response with a `job` value is followed in the console.
 
-`EXT.sections` may also be a function returning the list, evaluated when the page loads (the Logs tab uses this to list current files).
+Form field types include `text`, `number`, `password`, `select`, `textarea`, and `checkbox`; `required`, `options`, `placeholder`, `value`, `min`, `max`, `rows`, and `help` are supported as applicable.
 
-## Custom UI modules
+## Custom UI Modules
 
-For a page that does not fit table/form/text sections, give the extension `ui="name"` and ship `astra/web/ui/name.js` (built-in only). The file registers `window.ASTRA_UI.name = (view, ext, ASTRA) => {...}` and is downloaded only when the tab is opened. `ASTRA` offers `h`, `call`, `req`, `card`, `toast`, `showText`, `extView`, `timers` and `onLeave(fn)` for cleanup. See `web/ui/desktop.js`.
+For a page that does not fit the built-in section types, an extension may set `ui="name"` and register `window.ASTRA_UI.name = (view, ext, ASTRA) => { ... }`. The module is served from `astra/web/ui/name.js` and loaded only when its tab opens. This mechanism is for modules shipped in the application; user extensions cannot upload arbitrary web assets through the extensions directory. Existing modules such as `astra/web/ui/desktop.js` show the integration pattern.

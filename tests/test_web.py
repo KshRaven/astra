@@ -1,4 +1,4 @@
-"""Checks for the parts of the website checklist that apply to this panel."""
+"""Web asset, caching and audit checks."""
 import gzip, json, os, re, time, unittest
 from pathlib import Path
 from helpers import config, http, jhttp, start
@@ -6,7 +6,7 @@ from astra import audit
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "astra" / "web"
-FILES = [p for p in WEB.rglob("*") if p.is_file()] + list((ROOT / "astra" / "legal").glob("*.md"))
+FILES = [p for p in WEB.rglob("*") if p.is_file()]
 
 
 def lum(hex_):
@@ -20,7 +20,7 @@ def ratio(a, b):
     return (la + 0.05) / (lb + 0.05)
 
 
-class Compliance(unittest.TestCase):
+class WebAssets(unittest.TestCase):
     def test_no_third_party_requests(self):  # no SDKs, CDNs, fonts, analytics
         for f in FILES:
             txt = f.read_text()
@@ -54,24 +54,9 @@ class Compliance(unittest.TestCase):
         for needle in ("onkeydown", "ArrowLeft", "Escape", "aria-label", "role: 'menu'"):
             self.assertIn(needle, js)
 
-    def test_legal_pages_public_and_escaped(self):
-        for name in ("privacy", "terms"):
-            code, body, hdr = http(f"/legal/{name}")
-            self.assertEqual(code, 200)
-            self.assertIn("text/html", hdr["Content-Type"])
-        self.assertEqual(http("/legal/refund")[0], 404)  # nothing is sold, so no refund policy exists
-        config.cfg["operator"].update(name="<b>Ann</b>", email="ann@example.com")
-        try:
-            body = http("/legal/privacy")[1].decode()
-            self.assertIn("&lt;b&gt;Ann&lt;/b&gt;", body)
-            self.assertIn("ann@example.com", body)
-            self.assertNotIn("{{", body)
-        finally:
-            config.cfg["operator"].update(name="", email="")
-
     def test_no_cookies_set(self):
         _, token = start()
-        for path, b in (("/", None), ("/api/ping", token), ("/legal/privacy", None)):
+        for path, b in (("/", None), ("/api/ping", token)):
             self.assertNotIn("Set-Cookie", http(path, bearer=b)[2])
 
     def test_audit_retention_and_erase(self):

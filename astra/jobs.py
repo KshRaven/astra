@@ -1,6 +1,8 @@
 """Background jobs and the console.
 
-A job is a list of steps (commands or Python functions) run in a thread. Its output is kept in memory so the web
+A job is a list of steps (commands or Python functions) run in a thread. Installs, updates and other panel tasks wait in
+a queue and run `job_concurrency` at a time (default 1, because many servers have a single core and little RAM); console
+commands always run immediately. Its output is kept in memory so the web
 GUI can show live progress in the console drawer even when you switch pages. Used for installs/removals started by the
 panel and for commands typed into the console. Standard library only.
 """
@@ -28,7 +30,7 @@ class Job:
         self.title, self.steps, self.kind, self.cwd, self.ext = title, steps, kind, cwd, ext
         self.env = {**os.environ, "PYTHONUNBUFFERED": "1", "TERM": "xterm-256color", **(env or {})}
         self.interactive = interactive
-        self.state, self.rc, self.step, self.pct = "running", None, 0, None
+        self.state, self.rc, self.step, self.pct = "queued" if kind != "console" else "running", None, 0, None
         self.started, self.ended = time.time(), None
         self.buf, self.dropped = "", 0
         self.proc, self.fd, self.cancelled = None, None, False
@@ -53,7 +55,14 @@ class Job:
     def summary(self):
         return {"id": self.id, "title": self.title, "kind": self.kind, "state": self.state, "rc": self.rc,
                 "step": self.step, "steps": len(self.steps), "pct": self.pct, "started": int(self.started),
-                "ended": int(self.ended) if self.ended else None, "cwd": self.cwd, "interactive": self.interactive}
+                "ended": int(self.ended) if self.ended else None, "cwd": self.cwd, "interactive": self.interactive,
+                "queue_pos": self.queue_pos()}
+
+    def queue_pos(self):
+        if self.state != "queued":
+            return 0
+        q = [j.id for j in _jobs.values() if j.state == "queued"]
+        return q.index(self.id) + 1 if self.id in q else 0
 
     def read(self, since):
         with self.lock:
@@ -101,6 +110,7 @@ class Job:
 
     def run(self):
         rc = 0
+        self.state, self.started = "running", time.time()
         try:
             for i, step in enumerate(self.steps, 1):
                 if self.cancelled:
@@ -148,9 +158,14 @@ class Job:
             sev = {"done": "ok", "failed": "critical", "cancelled": "info"}[self.state]
             notify.add("tasks", sev, f"{self.title}: {self.state}", "Open the console to see the output." if sev != "ok" else "",
                        key=f"job:{self.id}")
+        _pump()
 
     def cancel(self):
         self.cancelled = True
+        if self.state == "queued":      # never started: just drop it from the queue
+            self.state, self.rc, self.ended = "cancelled", 130, time.time()
+            self.note("-- cancelled before it started --")
+            return
         p = self.proc
         if not p or p.poll() is not None:
             return
@@ -176,18 +191,41 @@ class Job:
                 pass
 
 
+def limit():
+    try:
+        return max(1, min(8, int(config.cfg.get("job_concurrency", 1))))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _pump():
+    """Start queued jobs while there is room (called when a job is added or finishes)."""
+    with _lock:
+        busy = sum(1 for j in _jobs.values() if j.kind != "console" and j.state == "running" and j.ended is None)
+        for j in list(_jobs.values()):
+            if busy >= limit():
+                break
+            if j.state == "queued":
+                j.state, j.started = "running", time.time()   # claim the slot now, the thread starts a moment later
+                busy += 1
+                threading.Thread(target=j.run, daemon=True, name=f"job-{j.id}").start()
+
+
 def start(title, steps, kind="task", env=None, cwd=None, interactive=False, ext=None):
     with _lock:
-        if kind == "install" and any(j.kind == "install" and j.state == "running" for j in _jobs.values()):
-            raise PanelError("another install or removal is still running: wait for it to finish (see the console)", 409)
+        if kind != "console" and any(j.title == title and j.state in ("queued", "running") for j in _jobs.values()):
+            raise PanelError(f"'{title}' is already waiting or running (see Tasks)", 409)
         job = Job(title, steps, kind, env, cwd, interactive, ext)
         _jobs[job.id] = job
         while len(_jobs) > MAX_JOBS:
-            old = next((k for k, j in _jobs.items() if j.state != "running"), None)
+            old = next((k for k, j in _jobs.items() if j.state not in ("queued", "running")), None)
             if old is None:
                 break
             del _jobs[old]
-    threading.Thread(target=job.run, daemon=True, name=f"job-{job.id}").start()
+    if kind == "console":
+        threading.Thread(target=job.run, daemon=True, name=f"job-{job.id}").start()
+    else:
+        _pump()
     return job
 
 
@@ -205,6 +243,17 @@ def listing():
 
 def running():
     return sum(1 for j in _jobs.values() if j.state == "running")
+
+
+def pending():
+    """Panel tasks (not console commands) that are running or waiting."""
+    return sum(1 for j in _jobs.values() if j.kind != "console" and j.state in ("queued", "running"))
+
+
+def clear_finished():
+    with _lock:
+        for k in [k for k, j in _jobs.items() if j.state not in ("queued", "running")]:
+            del _jobs[k]
 
 
 # ---------------------------------------------------------------- console
@@ -266,7 +315,19 @@ def route(parts, method, params, ip):
             return run_command(params.get("cmd"), params.get("cwd"), ip)
         raise PanelError("not found", 404)
     if len(parts) == 1:
-        return {"jobs": listing(), "running": running()}
+        return {"jobs": listing(), "running": running(), "pending": pending(), "limit": limit()}
+    if parts[1] == "clear" and method == "POST":
+        clear_finished()
+        return {"ok": True}
+    if parts[1] == "limit" and method == "POST":
+        try:
+            n = int(params.get("n"))
+        except (TypeError, ValueError):
+            raise PanelError("n must be a number from 1 to 8")
+        config.cfg["job_concurrency"] = max(1, min(8, n))
+        config.save()
+        _pump()
+        return {"ok": True, "limit": limit()}
     job = get(parts[1])
     if len(parts) == 2:
         try:

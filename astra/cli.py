@@ -1,6 +1,6 @@
 """Command line interface: `astra --help`."""
 import argparse, json, os, socket, sys, time
-from . import __version__, audit, config, daemon, mfa, monitor, plat
+from . import __version__, audit, config, daemon, deploy, mfa, monitor, plat
 from .errors import PanelError
 from .extensions import Raw, load_extensions, registry
 
@@ -171,6 +171,41 @@ def cmd_stop(a):
 def cmd_restart(a):
     daemon.stop()
     cmd_start(a)
+
+
+def cmd_service(a):
+    """astra service install|remove|status: keep the panel running at boot (systemd / Task Scheduler)."""
+    try:
+        if a.action == "install":
+            print(deploy.service_install()["message"])
+        elif a.action == "remove":
+            print(deploy.service_remove()["message"])
+        else:
+            st = deploy.service_status()
+            print(f"{st['kind']}: " + ("installed, " + ("running" if st["running"] else "not running") if st["installed"] else "not installed (astra service install)"))
+    except PanelError as e:
+        sys.exit(c("31", "error: ") + e.message)
+
+
+def cmd_domain(a):
+    """astra domain set panel.example.com | remove | show"""
+    try:
+        if a.action == "set":
+            if not a.name:
+                sys.exit("give a domain: astra domain set panel.example.com")
+            print(deploy.set_domain(a.name)["message"])
+            if a.persist:
+                print(deploy.service_install()["message"])
+        elif a.action == "remove":
+            deploy.clear_domain()
+            print("domain removed")
+        else:
+            d = deploy.domain_info()
+            print(f"domain: {d['domain'] or '(none)'}")
+            for u in d["urls"]:
+                print("  ", u)
+    except PanelError as e:
+        sys.exit(c("31", "error: ") + e.message)
 
 
 def cmd_url(a):
@@ -398,6 +433,8 @@ def main(argv=None):
     sp.add_parser("stop", help="stop the background web panel").set_defaults(f=cmd_stop)
     sp.add_parser("restart", help="restart the background web panel").set_defaults(f=cmd_restart)
     sp.add_parser("url", help="print the address(es) to open in a browser").set_defaults(f=cmd_url)
+    s = sp.add_parser("service", help="start the panel at boot (install|remove|status)"); s.add_argument("action", nargs="?", default="status", choices=["install", "remove", "status"]); s.set_defaults(f=cmd_service)
+    s = sp.add_parser("domain", help="publish the panel under a domain name (set|remove|show)"); s.add_argument("action", nargs="?", default="show", choices=["set", "remove", "show"]); s.add_argument("name", nargs="?"); s.add_argument("--persist", action="store_true", help="also install the boot service"); s.set_defaults(f=cmd_domain)
     s = sp.add_parser("install", help="install software from the catalog, e.g. astra install nginx"); s.add_argument("name"); s.set_defaults(f=cmd_install)
     s = sp.add_parser("uninstall", help="remove software (its data is kept)"); s.add_argument("name"); s.add_argument("--yes", action="store_true"); s.set_defaults(f=cmd_uninstall)
     sp.add_parser("catalog", help="list installable software and what is installed").set_defaults(f=cmd_catalog)

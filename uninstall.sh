@@ -3,6 +3,7 @@
 set -euo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "Run as root" >&2; exit 1; }
 systemctl disable --now astra 2>/dev/null || true
+pkill -f "python[0-9.]* -m astra" 2>/dev/null || true   # a panel started by hand (astra start)
 rm -f /etc/systemd/system/astra.service /usr/local/bin/astra
 systemctl daemon-reload
 rm -rf /opt/astra

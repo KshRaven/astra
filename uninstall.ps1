@@ -15,6 +15,10 @@ if (Get-ScheduledTask -TaskName 'AstraPanel' -ErrorAction SilentlyContinue) {
   Stop-ScheduledTask -TaskName 'AstraPanel' -ErrorAction SilentlyContinue
   Unregister-ScheduledTask -TaskName 'AstraPanel' -Confirm:$false
 }
+# A panel started by hand (astra start) or left over from the task keeps files and logs locked: end it too
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+  Where-Object { $_.ProcessId -ne $PID -and $_.Name -match '^pythonw?(\d.*)?\.exe$' -and $_.CommandLine -match '-m\s+astra' } |
+  ForEach-Object { Write-Host "Stopping astra process $($_.ProcessId)"; Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 2
 $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 $kept = ($machinePath -split ';') | Where-Object { $_ -and $_ -ne $Prefix }
