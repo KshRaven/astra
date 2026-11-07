@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en" data-theme="graphite" data-accent="indigo" data-size="m" data-density="cozy" data-sidebar="full">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>astra</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/custom.css">
+<script src="/theme.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<div id="login" class="login" hidden>
+  <aside class="login-art" aria-hidden="false">
+    <div class="brand-row"><span id="art-logo" class="logo"></span><span class="wordmark">astra</span></div>
+    <h2>Your server, in one calm place.</h2>
+    <ul id="art-points"></ul>
+  </aside>
+  <div class="login-pane">
+    <form id="login-form" class="login-card" autocomplete="on">
+      <span id="form-logo" class="logo sm"></span>
+      <h1>Welcome back</h1>
+      <p class="muted">Sign in with the administrator account you created during installation.</p>
+      <div class="field"><label for="user">Username</label><input id="user" name="username" autocomplete="username" required spellcheck="false"></div>
+      <div class="field"><label for="pass">Password</label>
+        <div class="pw"><input id="pass" name="password" type="password" autocomplete="current-password" required>
+          <button type="button" id="pw-eye" class="icon-btn sm ghost" aria-label="Show password"></button></div></div>
+      <button class="primary lg" id="login-go">Sign in</button>
+      <p id="login-err" class="bad" role="alert"></p>
+      <p class="muted small">Sessions stay in a secure browser cookie. Nothing is loaded from other sites. <a href="/legal/privacy">Privacy</a> · <a href="/legal/terms">Terms</a></p>
+    </form>
+    <form id="mfa-form" class="login-card" hidden>
+      <span id="mfa-logo" class="logo sm"></span>
+      <h1>Second step</h1>
+      <p id="mfa-help" class="muted"></p>
+      <div class="field"><label for="mfa-method">Method</label><select id="mfa-method"></select></div>
+      <button type="button" id="mfa-send">E-mail me a code</button>
+      <div class="field"><label for="mfa-code">6-digit code</label><input id="mfa-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required></div>
+      <button class="primary lg">Verify</button>
+      <button type="button" id="mfa-back" class="ghost">Back</button>
+      <p id="mfa-err" class="bad" role="alert"></p>
+    </form>
+  </div>
+</div>
+
+<div id="app" hidden>
+  <aside id="side" aria-label="Main navigation">
+    <div class="side-brand"><span id="side-logo" class="logo sm"></span><span class="wordmark">astra</span><span id="ver" class="ver"></span></div>
+    <nav id="nav"></nav>
+    <div class="side-foot"><button type="button" id="rail" class="icon-btn ghost"></button>
+      <span class="legal"><a href="/legal/privacy">Privacy</a> · <a href="/legal/terms">Terms</a></span></div>
+  </aside>
+  <div id="scrim"></div>
+  <div id="shell">
+    <header id="top">
+      <button type="button" id="burger" class="icon-btn ghost" aria-label="Open menu"></button>
+      <div id="crumb" class="crumb" aria-live="polite"></div>
+      <button type="button" id="search" class="search-btn" aria-label="Search or jump to"></button>
+      <div id="tb-actions" class="tb-actions"></div>
+    </header>
+    <div id="stage">
+      <main id="main" tabindex="-1"></main>
+      <section id="console" class="console" aria-label="Console" hidden></section>
+    </div>
+  </div>
+</div>
+<div id="toasts" role="status" aria-live="polite"></div>
+<script src="/ui/icons.js"></script>
+<script src="/app.js"></script>
+<script src="/ui/sections.js"></script>
+<script src="/ui/boot.js"></script>
+</body>
+</html>

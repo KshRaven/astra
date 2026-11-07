@@ -1,0 +1,10 @@
+# OPTIONAL test harness.  docker compose -f tests/docker/compose.yml run --rm tests
+#                         docker compose -f tests/docker/compose.yml up demo     (http://127.0.0.1:8800)
+services:
+  tests:
+    build: {context: ../.., dockerfile: tests/docker/Dockerfile}
+  demo:
+    build: {context: ../.., dockerfile: tests/docker/Dockerfile}
+    command: tests/demo.sh 8800
+    environment: {BIND_ALL: "1"}
+    ports: ["127.0.0.1:8800:8800"]   # published on loopback only; plain HTTP, throwaway data

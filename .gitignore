@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.dev-home/
+*.egg-info/
+dist/
+build/
+*commit.txt
+*.zip
